@@ -93,9 +93,36 @@ The config holds **no secret**; it reads an env var:
    variable on the environment instead — the container has no access to your
    local shell.
 
+`API_KEY_21ST` must be in the **process environment** — Claude Code expands
+`${...}` in `.mcp.json` from the environment, it does not read a `.env` file.
+(Vite's `.env` handling is separate and applies only to `import.meta.env` in
+`src/`.)
+
 Prefer the CLI? `npx @21st-dev/cli@latest login` stores a token in `~/.config/21st`
 and `npx @21st-dev/cli@latest init --client claude --write` merges this same block
 into `.mcp.json` without clobbering other servers.
 
 > Note: `@21st-dev/magic` is superseded — it is now a thin compatibility proxy to
 > the same endpoint configured above.
+
+### What the server exposes
+
+Verified against the live endpoint: **35 tools**. The ones that matter for this
+project:
+
+| Tool | Use |
+| --- | --- |
+| `search` | Search components, themes, and templates (metadata). **Free.** |
+| `get_component` | Pull a component's full source + demo. **Metered.** |
+| `get_theme` | Fetch a theme's `:root` / `.dark` CSS tokens. Free. |
+| `search_logo` | Brand/UI SVG logos from svgl.app. Free, no login. |
+| `generate` / `iterate_generation` / `get_take` | Generate UI from a prompt, then refine a variant. |
+| `get_usage` | Current tier and remaining daily quota. |
+
+Search and metadata calls are free; retrieving component **code** is the metered
+action. Free accounts get a small daily allowance — check it with `get_usage`.
+
+Because 21st components are React + Tailwind + shadcn, pulled-in code drops into
+`src/components/` with little adaptation. Keep animation on the shared vocabulary
+in `src/lib/motion.ts` rather than whatever timings a fetched component ships
+with, so the page stays one system.
