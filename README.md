@@ -55,3 +55,47 @@ traps focus on open, closes on <kbd>Escape</kbd>, and restores body scroll on ex
 
 Append an entry to `projects` in `src/lib/projects.ts`. `cover` is a two-stop
 gradient; `tags` must be drawn from `categories` for the filter to pick it up.
+
+## 21st.dev components (MCP)
+
+`.mcp.json` wires the [21st.dev](https://21st.dev) MCP server into this project, so
+Claude Code can search the 21st component registry and pull component source
+directly into `src/components/`. It's a good fit here — 21st ships React +
+Tailwind + shadcn components, which is exactly this stack.
+
+The config holds **no secret**; it reads an env var:
+
+```json
+{
+  "mcpServers": {
+    "21st": {
+      "type": "http",
+      "url": "https://21st.dev/api/mcp",
+      "headers": { "x-api-key": "${API_KEY_21ST}" }
+    }
+  }
+}
+```
+
+### Finishing the connection
+
+1. Grab a key at <https://21st.dev/settings/api-keys> (starts with `21st_sk_…`).
+2. Export it, then start Claude Code from this directory:
+
+   ```bash
+   export API_KEY_21ST="21st_sk_…"   # add to your shell profile to persist
+   claude
+   ```
+
+   Claude Code prompts once to approve the project-scoped server; `/mcp` shows it
+   as connected.
+3. For a Claude Code **web/remote** session, set `API_KEY_21ST` as an environment
+   variable on the environment instead — the container has no access to your
+   local shell.
+
+Prefer the CLI? `npx @21st-dev/cli@latest login` stores a token in `~/.config/21st`
+and `npx @21st-dev/cli@latest init --client claude --write` merges this same block
+into `.mcp.json` without clobbering other servers.
+
+> Note: `@21st-dev/magic` is superseded — it is now a thin compatibility proxy to
+> the same endpoint configured above.

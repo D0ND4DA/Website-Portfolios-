@@ -10,3 +10,6 @@ dist-ssr
 *.tsbuildinfo
 npm-debug.log*
 yarn-error.log*
+
+# 21st.dev design context (regenerate with: 21st init --design-context)
+.21st/
