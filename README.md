@@ -89,14 +89,37 @@ The config holds **no secret**; it reads an env var:
 
    Claude Code prompts once to approve the project-scoped server; `/mcp` shows it
    as connected.
-3. For a Claude Code **web/remote** session, set `API_KEY_21ST` as an environment
-   variable on the environment instead — the container has no access to your
-   local shell.
-
 `API_KEY_21ST` must be in the **process environment** — Claude Code expands
 `${...}` in `.mcp.json` from the environment, it does not read a `.env` file.
 (Vite's `.env` handling is separate and applies only to `import.meta.env` in
-`src/`.)
+`src/`.) If the variable is unset, the server still loads but authenticates with
+the literal string `${API_KEY_21ST}` and every call fails; `claude mcp list`
+flags it as a missing-variable warning.
+
+### Alternative: keep the key out of your shell too
+
+Local scope overrides project scope, so you can register a personal copy that
+wins over `.mcp.json` without touching the repo or exporting anything:
+
+```bash
+claude mcp add --transport http 21st https://21st.dev/api/mcp \
+  --header "x-api-key: 21st_sk_…"
+```
+
+That writes to `~/.claude.json` under this project's path — private to you, never
+committed. The committed `.mcp.json` still serves anyone else who clones the repo.
+
+### Cloud sessions
+
+Claude Code **cloud** sessions cannot hold this credential safely. Per the
+[cloud environment docs](https://code.claude.com/docs/en/cloud-environments#set-environment-variables),
+environment variables there are readable by anyone using the environment and
+there is no secrets store — the docs say explicitly not to put API keys in them.
+Use 21st.dev from local Claude Code instead.
+
+If you accept that tradeoff anyway, note that a `.mcp.json` server's traffic goes
+over the session network (unlike claude.ai connectors, which tunnel through
+Anthropic), so the environment's network access must permit `21st.dev`.
 
 Prefer the CLI? `npx @21st-dev/cli@latest login` stores a token in `~/.config/21st`
 and `npx @21st-dev/cli@latest init --client claude --write` merges this same block
