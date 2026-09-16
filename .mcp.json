@@ -6,6 +6,15 @@
       "headers": {
         "x-api-key": "${API_KEY_21ST}"
       }
+    },
+    "discord": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@ncodelife/discord-mcp-server@0.1.1"],
+      "env": {
+        "DISCORD_TOKEN": "${DISCORD_TOKEN}",
+        "DISCORD_GUILD_ID": "${DISCORD_GUILD_ID}"
+      }
     }
   }
 }
