@@ -20,8 +20,9 @@ LONG ENTRY - every condition true on a closed 15-second bar:
                  already above VWMA21.
     5m filter:   on the last *completed* 5-minute bar, at least two of the three
                  MACDs are green, OR the 72/200 MACD is green.
-    15m trend:   uptrend per the 21-length WMA on the last *completed*
-                 15-minute bar. --trend-mode picks the definition:
+    15m trend:   price is above the 15-minute WMA21 (already above, or crossing
+                 above on this bar), using the WMA from the last *completed*
+                 15m bar. Price below it means shorts only. --trend-mode:
                    price (default): 15s close is above the 15m WMA21
                    slope:           15m WMA21 is rising (above its prior bar)
                    both:            price above AND WMA21 rising
