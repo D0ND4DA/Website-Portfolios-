@@ -19,10 +19,10 @@ LONG ENTRY - every condition true on a closed 15-second bar:
     5m filter:   on the last *completed* 5-minute bar, at least two of the three
                  MACDs are green, OR the 72/200 MACD is green.
 
-EXITS (not given in the spec yet, placeholders; change in `add_signals`):
-    - the 8/22 MACD on 15s turns red (histogram crosses below 0)
-    - price closes below VWMA21 on 15s
-    - ATR stop loss / take profit, checked intrabar on high/low
+EXIT (long): the 72/200 MACD on the 15-second timeframe turns red
+    (histogram drops below 0). Exit fills at that bar's close.
+    Optional safety nets, off by default: --stop-atr / --target-atr add an
+    ATR stop loss / take profit checked intrabar on high/low.
 
 Short rules haven't been defined yet; `--allow-short` turns on the exact
 mirror of the long rules as a stand-in.
@@ -146,8 +146,8 @@ class Config:
     vwma_slow: int = 72
     wma_len: int = 200
     atr_len: int = 14
-    stop_atr: float = 3.0
-    target_atr: float = 6.0
+    stop_atr: float = 0.0  # 0 = off
+    target_atr: float = 0.0  # 0 = off
     point_value: float = 20.0  # NQ $20/pt, MNQ $2/pt
     contracts: int = 1
     commission: float = 2.50  # per contract per side
@@ -211,9 +211,9 @@ def add_signals(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     price_short = cross_below_72 | (c < v21)
     out["short_entry"] = all_red & any_turned_red & (v21 > v72) & price_short & out["htf_short_ok"]
 
-    # ---- EXITS (placeholders) ----
-    out["long_exit"] = out["turned_red_fast"] | (c < v21)
-    out["short_exit"] = out["turned_green_fast"] | (c > v21)
+    # ---- EXITS: 15s 72/200 MACD turns against the position ----
+    out["long_exit"] = ~out["green_slow"]
+    out["short_exit"] = out["green_slow"]
 
     # warm-up: 15s indicators + 200 bars of 5m data for the 72/200 MACD
     warm_until = out.index[0] + pd.Timedelta(cfg.filter_tf) * (MACDS["slow"][1] + MACDS["slow"][2])
@@ -268,7 +268,9 @@ def backtest(df: pd.DataFrame, cfg: Config) -> Result:
         if pending and pos is None:
             d = 1 if pending == "long" else -1
             fill = o[i] + d * cfg.slippage_pts
-            pos = Trade(pending, idx[i], fill, fill - d * cfg.stop_atr * a[i - 1], fill + d * cfg.target_atr * a[i - 1])
+            stop = fill - d * cfg.stop_atr * a[i - 1] if cfg.stop_atr > 0 else d * -np.inf
+            target = fill + d * cfg.target_atr * a[i - 1] if cfg.target_atr > 0 else d * np.inf
+            pos = Trade(pending, idx[i], fill, stop, target)
         pending = None
 
         if pos is not None:
@@ -355,8 +357,8 @@ def main() -> None:
     p.add_argument("--contracts", type=int, default=1)
     p.add_argument("--commission", type=float, default=2.50)
     p.add_argument("--slippage", type=float, default=0.25)
-    p.add_argument("--stop-atr", type=float, default=3.0)
-    p.add_argument("--target-atr", type=float, default=6.0)
+    p.add_argument("--stop-atr", type=float, default=0.0, help="ATR stop multiple, 0 = off")
+    p.add_argument("--target-atr", type=float, default=0.0, help="ATR target multiple, 0 = off")
     p.add_argument("--allow-short", action="store_true", help="enable mirrored short rules (placeholder)")
     p.add_argument("--live-signal", action="store_true", help="only print the latest bar's readings")
     p.add_argument("--trades-csv")
