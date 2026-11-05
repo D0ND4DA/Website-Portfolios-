@@ -62,6 +62,14 @@ Warm-up: the 72/200 MACD on 5-minute bars needs ~200 five-minute bars
 (~17 hours) of history before the filter is meaningful; the script won't
 trade until then.
 
+HEIKIN ASHI (--heikin-ashi): the CSV must hold REGULAR candles. The script
+builds Heikin Ashi candles on each timeframe (15s, 5m, 15m) from the real
+bars, the same way a TradingView Heikin Ashi chart does, and computes every
+indicator and price condition from them. Orders fill at REAL prices (next
+real open, real high/low for stops), because that is how a broker fills you.
+If the CSV itself looks like a Heikin Ashi export, the script warns: fills
+would then be at smoothed prices that never traded.
+
 Research / backtest only. It places no orders. Not financial advice.
 
 Examples:
@@ -159,6 +167,26 @@ def load_csv(path: str) -> pd.DataFrame:
     return df[cols].astype(float)
 
 
+def heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """Heikin Ashi candles from regular OHLC (TradingView's formula)."""
+    o, h, l, c = (df[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
+    ha_c = (o + h + l + c) / 4
+    ha_o = np.empty_like(ha_c)
+    ha_o[0] = (o[0] + c[0]) / 2
+    for i in range(1, len(ha_c)):
+        ha_o[i] = (ha_o[i - 1] + ha_c[i - 1]) / 2
+    out = df.copy()
+    out["open"], out["close"] = ha_o, ha_c
+    out["high"] = np.maximum.reduce([h, ha_o, ha_c])
+    out["low"] = np.minimum.reduce([l, ha_o, ha_c])
+    return out
+
+
+def looks_like_heikin_ashi(df: pd.DataFrame) -> bool:
+    o, c = df["open"].to_numpy(), df["close"].to_numpy()
+    return len(df) > 50 and np.isclose(o[1:], (o[:-1] + c[:-1]) / 2).mean() > 0.95
+
+
 def demo_data(hours: float = 40, start: float = 28160.0, seed: int = 7) -> pd.DataFrame:
     n = int(hours * 3600 / 15)
     rng = np.random.default_rng(seed)
@@ -179,6 +207,7 @@ def demo_data(hours: float = 40, start: float = 28160.0, seed: int = 7) -> pd.Da
 class Config:
     trigger_tf: str = "15s"
     signal_type: str = "sma"  # MACD signal line: sma | ema
+    heikin_ashi: bool = False  # indicators on HA candles, fills on real prices
     filter_tf: str = "5min"
     trend_tf: str = "15min"
     trend_wma_len: int = 21
@@ -199,17 +228,28 @@ class Config:
 
 def build(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     """Return 15s bars with indicators, the 5m filter merged in, and signals."""
-    ltf = add_macds(resample(raw, cfg.trigger_tf), cfg.signal_type)
+    # `bars(tf)`: the candles indicators are computed on (HA or regular).
+    # `ltf` keeps REAL prices for fills; signal values are copied onto it.
+    bars = lambda tf: heikin_ashi(resample(raw, tf)) if cfg.heikin_ashi else resample(raw, tf)
+
+    ltf = resample(raw, cfg.trigger_tf)
+    sig = add_macds(bars(cfg.trigger_tf), cfg.signal_type)
+    macd_cols = [col for col in sig.columns if col.startswith(("macd_", "green_", "turned_"))]
+    ltf[macd_cols] = sig[macd_cols]
+    ltf["sig_close"] = sig["close"]  # the "price" seen on the chart
     if "vwma21_chart" in ltf:
+        if cfg.heikin_ashi:
+            print("WARNING: no volume in the CSV, so the chart's exported VWMAs are used. On a regular-candle\n"
+                  "  chart those are VWMAs of REAL closes, not Heikin Ashi. Add the Volume indicator and re-export.")
         ltf["vwma21"], ltf["vwma72"] = ltf["vwma21_chart"], ltf["vwma72_chart"]
     else:
-        ltf["vwma21"] = vwma(ltf["close"], ltf["volume"], cfg.vwma_fast)
-        ltf["vwma72"] = vwma(ltf["close"], ltf["volume"], cfg.vwma_slow)
-    ltf["wma200"] = wma(ltf["close"], cfg.wma_len)
-    ltf["atr"] = atr(ltf, cfg.atr_len)
+        ltf["vwma21"] = vwma(sig["close"], sig["volume"], cfg.vwma_fast)
+        ltf["vwma72"] = vwma(sig["close"], sig["volume"], cfg.vwma_slow)
+    ltf["wma200"] = wma(sig["close"], cfg.wma_len)
+    ltf["atr"] = atr(ltf, cfg.atr_len)  # real-price volatility for stops
 
     # ---- 5-minute filter, using only COMPLETED 5m bars (no lookahead) ----
-    htf = add_macds(resample(raw, cfg.filter_tf), cfg.signal_type)
+    htf = add_macds(bars(cfg.filter_tf), cfg.signal_type)
     greens = htf[["green_fast", "green_mid", "green_slow"]].sum(axis=1)
     reds = (~htf[["green_fast", "green_mid", "green_slow"]]).sum(axis=1)
     htf["htf_long_ok"] = (greens >= 2) | htf["green_slow"]
@@ -234,7 +274,7 @@ def build(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
         merged[col] = merged[col].astype("boolean").fillna(False).astype(bool)
 
     # ---- 15-minute trend: WMA21 from COMPLETED 15m bars only ----
-    tf = resample(raw, cfg.trend_tf)
+    tf = bars(cfg.trend_tf)
     trend = pd.DataFrame({"trend_wma": wma(tf["close"], cfg.trend_wma_len)})
     trend["trend_wma_prev"] = trend["trend_wma"].shift()
     trend["trend_close_time"] = trend.index + pd.Timedelta(cfg.trend_tf)
@@ -252,7 +292,7 @@ def build(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
 def add_signals(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out = df.copy()
     names = list(MACDS)
-    c, v21, v72 = out["close"], out["vwma21"], out["vwma72"]
+    c, v21, v72 = out["sig_close"], out["vwma21"], out["vwma72"]
 
     # ---- 15m trend (WMA21) ----
     w, wp = out["trend_wma"], out["trend_wma_prev"]
@@ -441,6 +481,8 @@ def main() -> None:
     p.add_argument("--slippage", type=float, default=0.25)
     p.add_argument("--stop-atr", type=float, default=0.0, help="ATR stop multiple, 0 = off")
     p.add_argument("--target-atr", type=float, default=0.0, help="ATR target multiple, 0 = off")
+    p.add_argument("--heikin-ashi", action="store_true",
+                   help="compute indicators on Heikin Ashi candles (CSV must be regular candles)")
     p.add_argument("--signal-type", choices=["sma", "ema"], default="sma", help="MACD signal line smoothing")
     p.add_argument("--a-plus-only", action="store_true", help="only trade A+ setups (72/200 MACD converting)")
     p.add_argument("--long-only", action="store_true", help="disable short trades")
@@ -454,9 +496,15 @@ def main() -> None:
         point_value=args.point_value, contracts=args.contracts, commission=args.commission,
         slippage_pts=args.slippage, stop_atr=args.stop_atr, target_atr=args.target_atr,
         allow_short=not args.long_only, a_plus_only=args.a_plus_only, signal_type=args.signal_type,
+        heikin_ashi=args.heikin_ashi,
         trend_mode=args.trend_mode,
     )
     raw = load_csv(args.csv) if args.csv else demo_data()
+    if looks_like_heikin_ashi(raw):
+        print("WARNING: this CSV looks like a Heikin Ashi export. Fills will use smoothed prices that\n"
+              "  never traded, so P&L is unreliable. Export with regular candles and use --heikin-ashi.")
+        if args.heikin_ashi:
+            raise SystemExit("--heikin-ashi needs regular candles; this file is already Heikin Ashi.")
     df = build(raw, cfg)
     print(snapshot(df))
     if args.live_signal:
