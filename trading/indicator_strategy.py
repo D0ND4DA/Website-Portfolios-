@@ -5,10 +5,12 @@ Multi-timeframe MACD / VWMA trading script (15-second trigger, 5-minute filter).
 Indicators (from the TradingView layout):
     - Volume, WMA 200 (shown in the snapshot, not used in the entry rules)
     - VWMA 21, VWMA 72
-    - MACD 8 / 22 / 9    (close, EMA oscillator, EMA signal)
+    - MACD 8 / 22 / 9    (EMA oscillator; signal line smoothing below)
     - MACD 12 / 30 / 12
     - MACD 72 / 200 / 12
     A MACD is "green" when its histogram (MACD line - signal line) is above 0.
+    Signal line: SMA by default, because that is what the user's TradingView
+    export showed (an exact match). --signal-type ema switches to EMA.
 
 LONG ENTRY - every condition true on a closed 15-second bar:
     15s, MACDs:  all three MACDs are green, AND at least one of them turned
@@ -36,6 +38,9 @@ Data: one feed of fine-grained bars (15s or smaller, or ticks). The script
 resamples it to 15s and to 5m itself, so both timeframes come from the same data.
     --csv PATH   columns: time/datetime/timestamp, open, high, low, close, volume
                  (tick files with price + volume/size also work)
+                 If there is no volume column (e.g. OANDA CFDs) but the CSV is a
+                 TradingView export with two "VWMA" columns, the chart's own
+                 VWMA21 / VWMA72 values are used instead of recomputing them.
     --demo       synthetic data for testing the script
 
 Warm-up: the 72/200 MACD on 5-minute bars needs ~200 five-minute bars
@@ -84,11 +89,11 @@ def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / length, adjust=False).mean()
 
 
-def add_macds(df: pd.DataFrame) -> pd.DataFrame:
+def add_macds(df: pd.DataFrame, signal_type: str = "sma") -> pd.DataFrame:
     out = df.copy()
     for name, (f, s, sig) in MACDS.items():
         line = ema(out["close"], f) - ema(out["close"], s)
-        signal = ema(line, sig)
+        signal = line.rolling(sig).mean() if signal_type == "sma" else ema(line, sig)
         out[f"macd_{name}"] = line
         out[f"macd_{name}_sig"] = signal
         out[f"macd_{name}_hist"] = line - signal
@@ -103,9 +108,9 @@ def add_macds(df: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 def resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """OHLCV resample; bars are labelled by their START time (TradingView style)."""
-    out = df.resample(rule, label="left", closed="left").agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    )
+    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    agg.update({c: "last" for c in df.columns if c not in agg})  # e.g. chart VWMA columns
+    out = df.resample(rule, label="left", closed="left").agg(agg)
     return out.dropna(subset=["close"])
 
 
@@ -124,7 +129,19 @@ def load_csv(path: str) -> pd.DataFrame:
             df["volume"] = df[alias]
     if "close" not in df.columns and "price" in df.columns:  # tick data
         df["open"] = df["high"] = df["low"] = df["close"] = df["price"]
-    return df[["open", "high", "low", "close", "volume"]].astype(float)
+    cols = ["open", "high", "low", "close", "volume"]
+    if "volume" not in df.columns:
+        if {"vwma", "vwma.1"} <= set(df.columns):
+            # TradingView export: the smoother of the two VWMA plots is the 72
+            a, b = df["vwma"], df["vwma.1"]
+            fast, slow = (a, b) if a.diff().abs().mean() > b.diff().abs().mean() else (b, a)
+            df["vwma21_chart"], df["vwma72_chart"] = fast, slow
+            cols += ["vwma21_chart", "vwma72_chart"]
+            print("Note: no volume column; using the chart's exported VWMA21/VWMA72 values.")
+        else:
+            raise SystemExit("CSV has no volume column (needed for VWMA). Add Volume or the VWMA plots to the chart and re-export.")
+        df["volume"] = 1.0
+    return df[cols].astype(float)
 
 
 def demo_data(hours: float = 40, start: float = 28160.0, seed: int = 7) -> pd.DataFrame:
@@ -146,6 +163,7 @@ def demo_data(hours: float = 40, start: float = 28160.0, seed: int = 7) -> pd.Da
 @dataclass
 class Config:
     trigger_tf: str = "15s"
+    signal_type: str = "sma"  # MACD signal line: sma | ema
     filter_tf: str = "5min"
     vwma_fast: int = 21
     vwma_slow: int = 72
@@ -163,14 +181,17 @@ class Config:
 
 def build(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     """Return 15s bars with indicators, the 5m filter merged in, and signals."""
-    ltf = add_macds(resample(raw, cfg.trigger_tf))
-    ltf["vwma21"] = vwma(ltf["close"], ltf["volume"], cfg.vwma_fast)
-    ltf["vwma72"] = vwma(ltf["close"], ltf["volume"], cfg.vwma_slow)
+    ltf = add_macds(resample(raw, cfg.trigger_tf), cfg.signal_type)
+    if "vwma21_chart" in ltf:
+        ltf["vwma21"], ltf["vwma72"] = ltf["vwma21_chart"], ltf["vwma72_chart"]
+    else:
+        ltf["vwma21"] = vwma(ltf["close"], ltf["volume"], cfg.vwma_fast)
+        ltf["vwma72"] = vwma(ltf["close"], ltf["volume"], cfg.vwma_slow)
     ltf["wma200"] = wma(ltf["close"], cfg.wma_len)
     ltf["atr"] = atr(ltf, cfg.atr_len)
 
     # ---- 5-minute filter, using only COMPLETED 5m bars (no lookahead) ----
-    htf = add_macds(resample(raw, cfg.filter_tf))
+    htf = add_macds(resample(raw, cfg.filter_tf), cfg.signal_type)
     greens = htf[["green_fast", "green_mid", "green_slow"]].sum(axis=1)
     reds = (~htf[["green_fast", "green_mid", "green_slow"]]).sum(axis=1)
     htf["htf_long_ok"] = (greens >= 2) | htf["green_slow"]
@@ -381,6 +402,7 @@ def main() -> None:
     p.add_argument("--slippage", type=float, default=0.25)
     p.add_argument("--stop-atr", type=float, default=0.0, help="ATR stop multiple, 0 = off")
     p.add_argument("--target-atr", type=float, default=0.0, help="ATR target multiple, 0 = off")
+    p.add_argument("--signal-type", choices=["sma", "ema"], default="sma", help="MACD signal line smoothing")
     p.add_argument("--a-plus-only", action="store_true", help="only trade A+ setups (72/200 MACD converting)")
     p.add_argument("--allow-short", action="store_true", help="enable mirrored short rules (placeholder)")
     p.add_argument("--live-signal", action="store_true", help="only print the latest bar's readings")
@@ -390,7 +412,7 @@ def main() -> None:
     cfg = Config(
         point_value=args.point_value, contracts=args.contracts, commission=args.commission,
         slippage_pts=args.slippage, stop_atr=args.stop_atr, target_atr=args.target_atr,
-        allow_short=args.allow_short, a_plus_only=args.a_plus_only,
+        allow_short=args.allow_short, a_plus_only=args.a_plus_only, signal_type=args.signal_type,
     )
     raw = load_csv(args.csv) if args.csv else demo_data()
     df = build(raw, cfg)
