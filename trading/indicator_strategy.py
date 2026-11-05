@@ -18,11 +18,6 @@ LONG ENTRY - every condition true on a closed 15-second bar:
                  already above VWMA21.
     5m filter:   on the last *completed* 5-minute bar, at least two of the three
                  MACDs are green, OR the 72/200 MACD is green.
-    15m trend:   uptrend per the 21-length WMA on the last *completed*
-                 15-minute bar. --trend-mode picks the definition:
-                   price (default): 15s close is above the 15m WMA21
-                   slope:           15m WMA21 is rising (above its prior bar)
-                   both:            price above AND WMA21 rising
 
 EXIT (long): the 72/200 MACD on the 15-second timeframe turns red
     (histogram drops below 0). Exit fills at that bar's close.
@@ -33,7 +28,7 @@ Short rules haven't been defined yet; `--allow-short` turns on the exact
 mirror of the long rules as a stand-in.
 
 Data: one feed of fine-grained bars (15s or smaller, or ticks). The script
-resamples it to 15s, 5m and 15m itself, so every timeframe comes from the same data.
+resamples it to 15s and to 5m itself, so both timeframes come from the same data.
     --csv PATH   columns: time/datetime/timestamp, open, high, low, close, volume
                  (tick files with price + volume/size also work)
     --demo       synthetic data for testing the script
@@ -147,9 +142,6 @@ def demo_data(hours: float = 40, start: float = 28160.0, seed: int = 7) -> pd.Da
 class Config:
     trigger_tf: str = "15s"
     filter_tf: str = "5min"
-    trend_tf: str = "15min"
-    trend_wma_len: int = 21
-    trend_mode: str = "price"  # price | slope | both
     vwma_fast: int = 21
     vwma_slow: int = 72
     wma_len: int = 200
@@ -196,19 +188,6 @@ def build(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     for col in ("htf_long_ok", "htf_short_ok"):
         merged[col] = merged[col].astype("boolean").fillna(False).astype(bool)
 
-    # ---- 15-minute trend: WMA21 from COMPLETED 15m bars only ----
-    tf = resample(raw, cfg.trend_tf)
-    trend = pd.DataFrame({"trend_wma": wma(tf["close"], cfg.trend_wma_len)})
-    trend["trend_wma_prev"] = trend["trend_wma"].shift()
-    trend["trend_close_time"] = trend.index + pd.Timedelta(cfg.trend_tf)
-    merged = pd.merge_asof(
-        merged.reset_index().sort_values("bar_close_time"),
-        trend.dropna().reset_index(drop=True).sort_values("trend_close_time"),
-        left_on="bar_close_time",
-        right_on="trend_close_time",
-        direction="backward",
-    ).set_index("time")
-
     return add_signals(merged, cfg)
 
 
@@ -217,26 +196,20 @@ def add_signals(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     names = list(MACDS)
     c, v21, v72 = out["close"], out["vwma21"], out["vwma72"]
 
-    # ---- 15m trend (WMA21) ----
-    w, wp = out["trend_wma"], out["trend_wma_prev"]
-    up = {"price": c > w, "slope": w > wp, "both": (c > w) & (w > wp)}[cfg.trend_mode]
-    dn = {"price": c < w, "slope": w < wp, "both": (c < w) & (w < wp)}[cfg.trend_mode]
-    out["trend_up"], out["trend_dn"] = up.fillna(False), dn.fillna(False)
-
     # ---- LONG (as specified) ----
     all_green = np.logical_and.reduce([out[f"green_{n}"] for n in names])
     any_turned_green = np.logical_or.reduce([out[f"turned_green_{n}"] for n in names])
     vwma_stack_long = v21 < v72
     cross_above_72 = (c > v72) & (c.shift() <= v72.shift())
     price_long = cross_above_72 | (c > v21)
-    out["long_entry"] = all_green & any_turned_green & vwma_stack_long & price_long & out["htf_long_ok"] & out["trend_up"]
+    out["long_entry"] = all_green & any_turned_green & vwma_stack_long & price_long & out["htf_long_ok"]
 
     # ---- SHORT (placeholder mirror; only used with --allow-short) ----
     all_red = np.logical_and.reduce([~out[f"green_{n}"] for n in names])
     any_turned_red = np.logical_or.reduce([out[f"turned_red_{n}"] for n in names])
     cross_below_72 = (c < v72) & (c.shift() >= v72.shift())
     price_short = cross_below_72 | (c < v21)
-    out["short_entry"] = all_red & any_turned_red & (v21 > v72) & price_short & out["htf_short_ok"] & out["trend_dn"]
+    out["short_entry"] = all_red & any_turned_red & (v21 > v72) & price_short & out["htf_short_ok"]
 
     # ---- EXITS: 15s 72/200 MACD turns against the position ----
     out["long_exit"] = ~out["green_slow"]
@@ -371,8 +344,6 @@ def snapshot(df: pd.DataFrame) -> str:
         f"  5m  MACD hist  8/22 {r['htf_fast_hist']:6.2f} | 12/30 {r['htf_mid_hist']:6.2f} | 72/200 {r['htf_slow_hist']:6.2f}"
         f"  -> 5m filter {'PASS' if r['htf_long_ok'] else 'FAIL'} (long)"
     )
-    trend = "UP" if r["trend_up"] else "DOWN" if r["trend_dn"] else "neutral"
-    lines.append(f"  15m WMA21 {r['trend_wma']:,.2f} (prev {r['trend_wma_prev']:,.2f})  -> trend {trend}")
     lines.append(f"  Signal: {'LONG ENTRY' if r['long_entry'] else 'SHORT ENTRY' if r['short_entry'] else 'none'}")
     return "\n".join(lines)
 
@@ -388,8 +359,6 @@ def main() -> None:
     p.add_argument("--slippage", type=float, default=0.25)
     p.add_argument("--stop-atr", type=float, default=0.0, help="ATR stop multiple, 0 = off")
     p.add_argument("--target-atr", type=float, default=0.0, help="ATR target multiple, 0 = off")
-    p.add_argument("--trend-mode", choices=["price", "slope", "both"], default="price",
-                   help="how the 15m WMA21 defines uptrend (default: price above it)")
     p.add_argument("--allow-short", action="store_true", help="enable mirrored short rules (placeholder)")
     p.add_argument("--live-signal", action="store_true", help="only print the latest bar's readings")
     p.add_argument("--trades-csv")
@@ -398,7 +367,7 @@ def main() -> None:
     cfg = Config(
         point_value=args.point_value, contracts=args.contracts, commission=args.commission,
         slippage_pts=args.slippage, stop_atr=args.stop_atr, target_atr=args.target_atr,
-        allow_short=args.allow_short, trend_mode=args.trend_mode,
+        allow_short=args.allow_short,
     )
     raw = load_csv(args.csv) if args.csv else demo_data()
     df = build(raw, cfg)
