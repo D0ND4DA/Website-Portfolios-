@@ -31,8 +31,16 @@ MACD is the one converting from red to green on the entry bar; any other
 entry is "standard". --a-plus-only trades only A+ setups, and the backtest
 reports results for each grade.
 
-Short rules haven't been defined yet; `--allow-short` turns on the exact
-mirror of the long rules as a stand-in.
+SHORT ENTRY - the exact opposite of the long rules:
+    15s, MACDs:  all three MACDs are red, AND at least one of them turned
+                 red on this bar.
+    15s, VWMAs:  VWMA21 is above VWMA72.
+    15s, price:  price crosses below VWMA72 on this bar, OR price is
+                 already below VWMA21.
+    5m filter:   at least two of the three MACDs are red, OR the 72/200 is red.
+EXIT (short): the 72/200 MACD on the 15-second timeframe turns green.
+A short is A+ when the 72/200 MACD is the one converting from green to red.
+Shorts are on by default; --long-only turns them off.
 
 Data: one feed of fine-grained bars (15s or smaller, or ticks). The script
 resamples it to 15s and to 5m itself, so both timeframes come from the same data.
@@ -175,7 +183,7 @@ class Config:
     contracts: int = 1
     commission: float = 2.50  # per contract per side
     slippage_pts: float = 0.25  # per side
-    allow_short: bool = False
+    allow_short: bool = True
     a_plus_only: bool = False
 
 
@@ -231,7 +239,7 @@ def add_signals(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     price_long = cross_above_72 | (c > v21)
     out["long_entry"] = all_green & any_turned_green & vwma_stack_long & price_long & out["htf_long_ok"]
 
-    # ---- SHORT (placeholder mirror; only used with --allow-short) ----
+    # ---- SHORT (mirror of the long rules) ----
     all_red = np.logical_and.reduce([~out[f"green_{n}"] for n in names])
     any_turned_red = np.logical_or.reduce([out[f"turned_red_{n}"] for n in names])
     cross_below_72 = (c < v72) & (c.shift() >= v72.shift())
@@ -404,7 +412,7 @@ def main() -> None:
     p.add_argument("--target-atr", type=float, default=0.0, help="ATR target multiple, 0 = off")
     p.add_argument("--signal-type", choices=["sma", "ema"], default="sma", help="MACD signal line smoothing")
     p.add_argument("--a-plus-only", action="store_true", help="only trade A+ setups (72/200 MACD converting)")
-    p.add_argument("--allow-short", action="store_true", help="enable mirrored short rules (placeholder)")
+    p.add_argument("--long-only", action="store_true", help="disable short trades")
     p.add_argument("--live-signal", action="store_true", help="only print the latest bar's readings")
     p.add_argument("--trades-csv")
     args = p.parse_args()
@@ -412,7 +420,7 @@ def main() -> None:
     cfg = Config(
         point_value=args.point_value, contracts=args.contracts, commission=args.commission,
         slippage_pts=args.slippage, stop_atr=args.stop_atr, target_atr=args.target_atr,
-        allow_short=args.allow_short, a_plus_only=args.a_plus_only, signal_type=args.signal_type,
+        allow_short=not args.long_only, a_plus_only=args.a_plus_only, signal_type=args.signal_type,
     )
     raw = load_csv(args.csv) if args.csv else demo_data()
     df = build(raw, cfg)
