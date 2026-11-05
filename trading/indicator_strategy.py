@@ -24,6 +24,11 @@ EXIT (long): the 72/200 MACD on the 15-second timeframe turns red
     Optional safety nets, off by default: --stop-atr / --target-atr add an
     ATR stop loss / take profit checked intrabar on high/low.
 
+SETUP QUALITY: an entry is tagged "A+" (highest quality) when the 72/200
+MACD is the one converting from red to green on the entry bar; any other
+entry is "standard". --a-plus-only trades only A+ setups, and the backtest
+reports results for each grade.
+
 Short rules haven't been defined yet; `--allow-short` turns on the exact
 mirror of the long rules as a stand-in.
 
@@ -153,6 +158,7 @@ class Config:
     commission: float = 2.50  # per contract per side
     slippage_pts: float = 0.25  # per side
     allow_short: bool = False
+    a_plus_only: bool = False
 
 
 def build(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
@@ -211,6 +217,13 @@ def add_signals(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     price_short = cross_below_72 | (c < v21)
     out["short_entry"] = all_red & any_turned_red & (v21 > v72) & price_short & out["htf_short_ok"]
 
+    # ---- SETUP QUALITY: A+ when the 72/200 MACD is the one converting ----
+    a_plus = (out["long_entry"] & out["turned_green_slow"]) | (out["short_entry"] & out["turned_red_slow"])
+    out["quality"] = np.where(a_plus, "A+", np.where(out["long_entry"] | out["short_entry"], "standard", ""))
+    if cfg.a_plus_only:
+        out["long_entry"] &= a_plus
+        out["short_entry"] &= a_plus
+
     # ---- EXITS: 15s 72/200 MACD turns against the position ----
     out["long_exit"] = ~out["green_slow"]
     out["short_exit"] = out["green_slow"]
@@ -235,6 +248,7 @@ class Trade:
     exit_time: pd.Timestamp | None = None
     exit: float | None = None
     reason: str = ""
+    quality: str = ""
     pnl: float = 0.0
 
 
@@ -253,6 +267,8 @@ def backtest(df: pd.DataFrame, cfg: Config) -> Result:
     o, h, l, c, a = (df[k].to_numpy() for k in ("open", "high", "low", "close", "atr"))
     le, se = df["long_entry"].to_numpy(), df["short_entry"].to_numpy()
     lx, sx = df["long_exit"].to_numpy(), df["short_exit"].to_numpy()
+    q = df["quality"].to_numpy()
+    pending_q = ""
 
     def close_pos(i: int, price: float, reason: str) -> None:
         nonlocal pos, equity
@@ -270,7 +286,7 @@ def backtest(df: pd.DataFrame, cfg: Config) -> Result:
             fill = o[i] + d * cfg.slippage_pts
             stop = fill - d * cfg.stop_atr * a[i - 1] if cfg.stop_atr > 0 else d * -np.inf
             target = fill + d * cfg.target_atr * a[i - 1] if cfg.target_atr > 0 else d * np.inf
-            pos = Trade(pending, idx[i], fill, stop, target)
+            pos = Trade(pending, idx[i], fill, stop, target, quality=pending_q)
         pending = None
 
         if pos is not None:
@@ -290,9 +306,9 @@ def backtest(df: pd.DataFrame, cfg: Config) -> Result:
 
         if pos is None:
             if le[i]:
-                pending = "long"
+                pending, pending_q = "long", q[i]
             elif se[i] and cfg.allow_short:
-                pending = "short"
+                pending, pending_q = "short", q[i]
 
         open_pnl = 0.0
         if pos is not None:
@@ -324,6 +340,11 @@ def summarize(res: Result) -> str:
         f"Profit factor:  {pf:.2f}",
         f"Max drawdown:   ${dd:,.2f}",
         f"Exit reasons:   {pd.Series([x.reason for x in t]).value_counts().to_dict()}",
+        *[
+            f"  {g:<9} {len(sub):3d} trades | win {np.mean(sub > 0):6.1%} | net ${sub.sum():>11,.2f} | avg ${sub.mean():>9,.2f}"
+            for g in ("A+", "standard")
+            if len(sub := np.array([x.pnl for x in t if x.quality == g]))
+        ],
     ])
 
 
@@ -344,7 +365,8 @@ def snapshot(df: pd.DataFrame) -> str:
         f"  5m  MACD hist  8/22 {r['htf_fast_hist']:6.2f} | 12/30 {r['htf_mid_hist']:6.2f} | 72/200 {r['htf_slow_hist']:6.2f}"
         f"  -> 5m filter {'PASS' if r['htf_long_ok'] else 'FAIL'} (long)"
     )
-    lines.append(f"  Signal: {'LONG ENTRY' if r['long_entry'] else 'SHORT ENTRY' if r['short_entry'] else 'none'}")
+    sig = "LONG ENTRY" if r["long_entry"] else "SHORT ENTRY" if r["short_entry"] else "none"
+    lines.append(f"  Signal: {sig}{f'  [{r.quality}]' if sig != 'none' else ''}")
     return "\n".join(lines)
 
 
@@ -359,6 +381,7 @@ def main() -> None:
     p.add_argument("--slippage", type=float, default=0.25)
     p.add_argument("--stop-atr", type=float, default=0.0, help="ATR stop multiple, 0 = off")
     p.add_argument("--target-atr", type=float, default=0.0, help="ATR target multiple, 0 = off")
+    p.add_argument("--a-plus-only", action="store_true", help="only trade A+ setups (72/200 MACD converting)")
     p.add_argument("--allow-short", action="store_true", help="enable mirrored short rules (placeholder)")
     p.add_argument("--live-signal", action="store_true", help="only print the latest bar's readings")
     p.add_argument("--trades-csv")
@@ -367,7 +390,7 @@ def main() -> None:
     cfg = Config(
         point_value=args.point_value, contracts=args.contracts, commission=args.commission,
         slippage_pts=args.slippage, stop_atr=args.stop_atr, target_atr=args.target_atr,
-        allow_short=args.allow_short,
+        allow_short=args.allow_short, a_plus_only=args.a_plus_only,
     )
     raw = load_csv(args.csv) if args.csv else demo_data()
     df = build(raw, cfg)
