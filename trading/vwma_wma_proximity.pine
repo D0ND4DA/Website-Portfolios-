@@ -1,0 +1,172 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// VWMA(5m) / WMA(15s) Proximity & Long Setup
+// ------------------------------------------------------------
+//  • 5-minute VWMA (length 14)   – pulled via request.security
+//  • 15-second WMA (length 200)  – pulled via request.security
+//  • Closeness of price to each average (% and ATR units)
+//  • Which average is on top (VWMA vs WMA) and the spread between them
+//  • When price crosses the 5m VWMA
+//  • LONG SETUP = 5m VWMA > 15s WMA  AND  price crosses UP through the 5m VWMA
+//
+// Notes
+//  • Seconds-based timeframes ("15S") need a TradingView plan with seconds data.
+//  • Best used on a chart of 1 minute or lower (15S, 30S, 1m).
+//    On charts above 15s the WMA value is the one from the last 15s bar inside each chart bar.
+//  • The symbol must report volume for the VWMA to be meaningful.
+
+//@version=6
+indicator("VWMA(5m) / WMA(15s) Proximity & Long Setup", shorttitle = "VWMA/WMA Prox", overlay = true, max_labels_count = 500)
+
+// ───────────────────────────── Inputs ─────────────────────────────
+grpMA    = "Moving averages"
+vwmaTF   = input.timeframe("5",   "VWMA timeframe", group = grpMA)
+vwmaLen  = input.int(14,          "VWMA length", minval = 1, group = grpMA)
+wmaTF    = input.timeframe("15S", "WMA timeframe", group = grpMA)
+wmaLen   = input.int(200,         "WMA length", minval = 1, group = grpMA)
+noRepaint = input.bool(false, "Non-repainting VWMA (use last CLOSED 5m bar)", group = grpMA,
+     tooltip = "Off = live 5m VWMA that updates while the 5m bar is forming (matches a 5m chart).\nOn = uses the last completed 5m bar only, so historical signals never change.")
+
+grpSig    = "Signals"
+crossMode = input.string("Close crosses", "Cross definition", options = ["Close crosses", "Bar pierces"], group = grpSig,
+     tooltip = "Close crosses: close moves from one side of the VWMA to the other.\nBar pierces: the bar's high/low range touches the VWMA and it closes on one side.")
+nearPct   = input.float(0.10, "'Near' threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
+     tooltip = "Price is flagged NEAR an average when it is within this % of it.")
+atrLen    = input.int(14, "ATR length (for distance in ATRs)", minval = 1, group = grpSig)
+showShort = input.bool(false, "Also show mirrored SHORT setups", group = grpSig)
+
+grpVis    = "Display"
+showFill  = input.bool(true,  "Fill between averages (color = which is on top)", group = grpVis)
+showCross = input.bool(true,  "Mark every VWMA cross", group = grpVis)
+showBg    = input.bool(true,  "Highlight setup bars", group = grpVis)
+showTable = input.bool(true,  "Show info table", group = grpVis)
+tablePos  = input.string("Top Right", "Table position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = grpVis)
+
+colVwma   = input.color(color.new(#2962FF, 0), "VWMA color", group = grpVis)
+colWma    = input.color(color.new(#FF9800, 0), "WMA color",  group = grpVis)
+colBull   = input.color(color.new(#00C853, 0), "Bullish color", group = grpVis)
+colBear   = input.color(color.new(#FF1744, 0), "Bearish color", group = grpVis)
+
+// ───────────────────────────── Averages ─────────────────────────────
+// 5m VWMA(14). Non-repainting variant: previous 5m value + lookahead_on (standard safe idiom).
+vwmaLive   = request.security(syminfo.tickerid, vwmaTF, ta.vwma(close, vwmaLen), lookahead = barmerge.lookahead_off)
+vwmaClosed = request.security(syminfo.tickerid, vwmaTF, ta.vwma(close, vwmaLen)[1], lookahead = barmerge.lookahead_on)
+vwma5      = noRepaint ? vwmaClosed : vwmaLive
+
+// 15s WMA(200)
+wma15 = request.security(syminfo.tickerid, wmaTF, ta.wma(close, wmaLen), lookahead = barmerge.lookahead_off)
+
+ready = not na(vwma5) and not na(wma15)
+atr   = ta.atr(atrLen)
+
+// ───────────────────────────── Closeness ─────────────────────────────
+distVwmaPct = (close - vwma5) / vwma5 * 100.0
+distWmaPct  = (close - wma15) / wma15 * 100.0
+distVwmaAtr = (close - vwma5) / atr
+distWmaAtr  = (close - wma15) / atr
+nearVwma    = math.abs(distVwmaPct) <= nearPct
+nearWma     = math.abs(distWmaPct)  <= nearPct
+
+// ───────────────────────────── MA order ─────────────────────────────
+vwmaAbove = vwma5 > wma15
+vwmaBelow = vwma5 < wma15
+spreadPct = (vwma5 - wma15) / wma15 * 100.0
+orderFlipBull = ready and vwmaAbove and not vwmaAbove[1]
+orderFlipBear = ready and vwmaBelow and not vwmaBelow[1]
+
+// ───────────────────────────── VWMA crosses ─────────────────────────────
+closeXUp   = ta.crossover(close, vwma5)
+closeXDn   = ta.crossunder(close, vwma5)
+pierced    = low <= vwma5 and high >= vwma5
+pierceUp   = pierced and close > vwma5
+pierceDn   = pierced and close < vwma5
+
+crossUp    = ready and (crossMode == "Close crosses" ? closeXUp : pierceUp)
+crossDown  = ready and (crossMode == "Close crosses" ? closeXDn : pierceDn)
+
+// ───────────────────────────── Setups ─────────────────────────────
+longSetup  = crossUp and vwmaAbove                      // optimum long
+shortSetup = showShort and crossDown and vwmaBelow      // mirrored short (optional)
+longWatch  = ready and vwmaAbove and nearVwma and not longSetup   // bullish order, price sitting on the VWMA
+
+// ───────────────────────────── Plots ─────────────────────────────
+pV = plot(vwma5, "5m VWMA", color = colVwma, linewidth = 2)
+pW = plot(wma15, "15s WMA", color = colWma,  linewidth = 2)
+fill(pV, pW, color = showFill ? (vwmaAbove ? color.new(colBull, 85) : color.new(colBear, 85)) : na, title = "Order fill")
+
+plotshape(showCross and crossUp   and not longSetup,  "VWMA cross up",   shape.triangleup,   location.belowbar, color.new(colBull, 40), size = size.tiny)
+plotshape(showCross and crossDown and not shortSetup, "VWMA cross down", shape.triangledown, location.abovebar, color.new(colBear, 40), size = size.tiny)
+plotshape(longSetup,  "LONG setup",  shape.labelup,   location.belowbar, colBull, text = "LONG",  textcolor = color.white, size = size.small)
+plotshape(shortSetup, "SHORT setup", shape.labeldown, location.abovebar, colBear, text = "SHORT", textcolor = color.white, size = size.small)
+
+bgcolor(showBg and longSetup  ? color.new(colBull, 85) : na, title = "Long setup bg")
+bgcolor(showBg and shortSetup ? color.new(colBear, 85) : na, title = "Short setup bg")
+
+// Data-window values (hidden on chart)
+plot(distVwmaPct, "Price vs VWMA %", display = display.data_window)
+plot(distWmaPct,  "Price vs WMA %",  display = display.data_window)
+plot(spreadPct,   "VWMA - WMA spread %", display = display.data_window)
+plot(vwmaAbove ? 1 : vwmaBelow ? -1 : 0, "Order (1 = VWMA above, -1 = below)", display = display.data_window)
+
+// ───────────────────────────── Table ─────────────────────────────
+f_pos(s) =>
+    switch s
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+var table tbl = table.new(f_pos(tablePos), 3, 8, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+f_cell(c, r, txt, tc) =>
+    table.cell(tbl, c, r, txt, text_color = tc, text_size = size.small, text_halign = text.align_left)
+
+fmtPct = "+0.000;-0.000"
+fmtAtr = "+0.00;-0.00"
+barsSinceX = ta.barssince(crossUp or crossDown)
+lastXUp    = ta.barssince(crossUp) == barsSinceX
+
+if showTable and barstate.islast
+    txtCol = color.white
+    f_cell(0, 0, "Metric", color.gray)
+    f_cell(1, 0, "Value",  color.gray)
+    f_cell(2, 0, "Status", color.gray)
+
+    f_cell(0, 1, vwmaTF + " VWMA(" + str.tostring(vwmaLen) + ")", colVwma)
+    f_cell(1, 1, str.tostring(vwma5, format.mintick), txtCol)
+    f_cell(2, 1, noRepaint ? "closed bar" : "live", color.gray)
+
+    f_cell(0, 2, wmaTF + " WMA(" + str.tostring(wmaLen) + ")", colWma)
+    f_cell(1, 2, str.tostring(wma15, format.mintick), txtCol)
+    f_cell(2, 2, "", txtCol)
+
+    f_cell(0, 3, "Price ↔ VWMA", txtCol)
+    f_cell(1, 3, str.tostring(distVwmaPct, fmtPct) + "%  |  " + str.tostring(distVwmaAtr, fmtAtr) + " ATR", txtCol)
+    f_cell(2, 3, nearVwma ? "NEAR" : (close > vwma5 ? "above" : "below"), nearVwma ? color.yellow : (close > vwma5 ? colBull : colBear))
+
+    f_cell(0, 4, "Price ↔ WMA", txtCol)
+    f_cell(1, 4, str.tostring(distWmaPct, fmtPct) + "%  |  " + str.tostring(distWmaAtr, fmtAtr) + " ATR", txtCol)
+    f_cell(2, 4, nearWma ? "NEAR" : (close > wma15 ? "above" : "below"), nearWma ? color.yellow : (close > wma15 ? colBull : colBear))
+
+    f_cell(0, 5, "MA order", txtCol)
+    f_cell(1, 5, (vwmaAbove ? "VWMA > WMA" : vwmaBelow ? "VWMA < WMA" : "VWMA = WMA") + "  (" + str.tostring(spreadPct, fmtPct) + "%)", txtCol)
+    f_cell(2, 5, vwmaAbove ? "BULLISH" : vwmaBelow ? "BEARISH" : "FLAT", vwmaAbove ? colBull : vwmaBelow ? colBear : color.gray)
+
+    f_cell(0, 6, "VWMA cross", txtCol)
+    f_cell(1, 6, na(barsSinceX) ? "none yet" : (lastXUp ? "UP " : "DOWN ") + str.tostring(barsSinceX) + " bars ago", txtCol)
+    f_cell(2, 6, crossUp ? "CROSSING UP" : crossDown ? "CROSSING DN" : "—", crossUp ? colBull : crossDown ? colBear : color.gray)
+
+    f_cell(0, 7, "LONG setup", txtCol)
+    f_cell(1, 7, "VWMA>WMA + cross up", color.gray)
+    f_cell(2, 7, longSetup ? "✔ ACTIVE" : longWatch ? "WATCH (near VWMA)" : vwmaAbove ? "waiting for cross" : "✘ order bearish",
+         longSetup ? colBull : longWatch ? color.yellow : color.gray)
+
+// ───────────────────────────── Alerts ─────────────────────────────
+alertcondition(longSetup,  "LONG setup",           "LONG setup: 5m VWMA > 15s WMA and price crossed UP through 5m VWMA")
+alertcondition(shortSetup, "SHORT setup",          "SHORT setup: 5m VWMA < 15s WMA and price crossed DOWN through 5m VWMA")
+alertcondition(crossUp,    "Price crossed above 5m VWMA", "Price crossed ABOVE the 5m VWMA")
+alertcondition(crossDown,  "Price crossed below 5m VWMA", "Price crossed BELOW the 5m VWMA")
+alertcondition(orderFlipBull, "VWMA moved above WMA", "5m VWMA crossed ABOVE the 15s WMA (bullish order)")
+alertcondition(orderFlipBear, "VWMA moved below WMA", "5m VWMA crossed BELOW the 15s WMA (bearish order)")
+alertcondition(longWatch and not longWatch[1], "Long watch", "Bullish order and price is near the 5m VWMA")
