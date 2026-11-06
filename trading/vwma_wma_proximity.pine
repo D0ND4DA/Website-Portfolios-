@@ -87,6 +87,8 @@ crossDown  = ready and (crossMode == "Close crosses" ? closeXDn : pierceDn)
 longSetup  = crossUp and vwmaAbove                      // optimum long
 shortSetup = showShort and crossDown and vwmaBelow      // mirrored short (optional)
 longWatch  = ready and vwmaAbove and nearVwma and not longSetup   // bullish order, price sitting on the VWMA
+shortCross = crossDown and vwmaBelow                    // short setup condition, independent of the display toggle
+shortWatch = ready and vwmaBelow and nearVwma and not shortCross  // bearish order, price sitting on the VWMA
 
 // ───────────────────────────── Plots ─────────────────────────────
 pV = plot(vwma5, "5m VWMA", color = colVwma, linewidth = 2)
@@ -117,7 +119,7 @@ f_pos(s) =>
         "Bottom Left"  => position.bottom_left
         => position.top_right
 
-var table tbl = table.new(f_pos(tablePos), 3, 8, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table tbl = table.new(f_pos(tablePos), 3, 9, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 
 f_cell(c, r, txt, tc) =>
     table.cell(tbl, c, r, txt, text_color = tc, text_size = size.small, text_halign = text.align_left)
@@ -165,6 +167,11 @@ if showTable and barstate.islast
     f_cell(2, 7, longSetup ? "✔ ACTIVE" : longWatch ? "WATCH (near VWMA)" : vwmaAbove ? "waiting for cross" : "✘ order bearish",
          longSetup ? colBull : longWatch ? color.yellow : color.gray)
 
+    f_cell(0, 8, "SHORT setup", txtCol)
+    f_cell(1, 8, "VWMA<WMA + cross down", color.gray)
+    f_cell(2, 8, shortCross ? "✔ ACTIVE" : shortWatch ? "WATCH (near VWMA)" : vwmaBelow ? "waiting for cross" : "✘ order bullish",
+         shortCross ? colBear : shortWatch ? color.orange : color.gray)
+
 // ───────────────────────────── Alerts ─────────────────────────────
 alertcondition(longSetup,  "LONG setup",           "LONG setup: 5m VWMA > 15s WMA and price crossed UP through 5m VWMA")
 alertcondition(shortSetup, "SHORT setup",          "SHORT setup: 5m VWMA < 15s WMA and price crossed DOWN through 5m VWMA")
@@ -173,3 +180,4 @@ alertcondition(crossDown,  "Price crossed below 5m VWMA", "Price crossed BELOW t
 alertcondition(orderFlipBull, "VWMA moved above WMA", "5m VWMA crossed ABOVE the 15s WMA (bullish order)")
 alertcondition(orderFlipBear, "VWMA moved below WMA", "5m VWMA crossed BELOW the 15s WMA (bearish order)")
 alertcondition(longWatch and not longWatch[1], "Long watch", "Bullish order and price is near the 5m VWMA")
+alertcondition(shortWatch and not shortWatch[1], "Short watch", "Bearish order and price is near the 5m VWMA")
