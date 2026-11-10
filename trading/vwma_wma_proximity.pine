@@ -9,6 +9,7 @@
 //  • Which average is on top (VWMA vs WMA) and the spread between them
 //  • When price crosses the 5m VWMA
 //  • LONG SETUP = 5m VWMA > 15s WMA  AND  price crosses UP through the 5m VWMA
+//  • Two sets of three MACDs (8/22/9, 12/30/12, 72/200/12): set 1 on 5m, set 2 on 15s
 //
 // Notes
 //  • Seconds-based timeframes ("15S") need a TradingView plan with seconds data.
@@ -25,8 +26,8 @@ vwmaTF   = input.timeframe("5",   "VWMA timeframe", group = grpMA)
 vwmaLen  = input.int(14,          "VWMA length", minval = 1, group = grpMA)
 wmaTF    = input.timeframe("15S", "WMA timeframe", group = grpMA)
 wmaLen   = input.int(200,         "WMA length", minval = 1, group = grpMA)
-noRepaint = input.bool(false, "Non-repainting VWMA (use last CLOSED 5m bar)", group = grpMA,
-     tooltip = "Off = live 5m VWMA that updates while the 5m bar is forming (matches a 5m chart).\nOn = uses the last completed 5m bar only, so historical signals never change.")
+noRepaint = input.bool(false, "Non-repainting 5m data (use last CLOSED 5m bar)", group = grpMA,
+     tooltip = "Applies to the 5m VWMA and the 5m MACD set.\nOff = live values that update while the 5m bar is forming (matches a 5m chart).\nOn = uses the last completed 5m bar only, so historical values never change.")
 
 grpSig    = "Signals"
 crossMode = input.string("Close crosses", "Cross definition", options = ["Close crosses", "Bar pierces"], group = grpSig,
@@ -37,12 +38,27 @@ showShort = input.bool(false, "Also show mirrored SHORT setups", group = grpSig)
 gapThr    = input.float(0.10, "Tight gap threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
      tooltip = "The averages count as TIGHT when the gap between the 5m VWMA and the 15s WMA is this % or less (either side).")
 
+grpMacd   = "MACDs"
+macdTF1   = input.timeframe("5",   "Set 1 timeframe", group = grpMacd)
+macdTF2   = input.timeframe("15S", "Set 2 timeframe", group = grpMacd)
+mAf = input.int(8,  "MACD A  fast", minval = 1, group = grpMacd, inline = "mA")
+mAs = input.int(22, "slow",         minval = 1, group = grpMacd, inline = "mA")
+mAg = input.int(9,  "signal",       minval = 1, group = grpMacd, inline = "mA")
+mBf = input.int(12, "MACD B  fast", minval = 1, group = grpMacd, inline = "mB")
+mBs = input.int(30, "slow",         minval = 1, group = grpMacd, inline = "mB")
+mBg = input.int(12, "signal",       minval = 1, group = grpMacd, inline = "mB")
+mCf = input.int(72, "MACD C  fast", minval = 1, group = grpMacd, inline = "mC")
+mCs = input.int(200, "slow",        minval = 1, group = grpMacd, inline = "mC")
+mCg = input.int(12, "signal",       minval = 1, group = grpMacd, inline = "mC")
+
 grpVis    = "Display"
 showFill  = input.bool(true,  "Fill between averages (color = which is on top)", group = grpVis)
 showCross = input.bool(true,  "Mark every VWMA cross", group = grpVis)
 showBg    = input.bool(true,  "Highlight setup bars", group = grpVis)
 showTable = input.bool(true,  "Show info table", group = grpVis)
 tablePos  = input.string("Top Right", "Table position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = grpVis)
+showMacdT = input.bool(true,  "Show MACD table", group = grpVis)
+macdPos   = input.string("Bottom Right", "MACD table position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = grpVis)
 
 colVwma   = input.color(color.new(#2962FF, 0), "VWMA color", group = grpVis)
 colWma    = input.color(color.new(#FF9800, 0), "WMA color",  group = grpVis)
@@ -57,6 +73,22 @@ vwma5      = noRepaint ? vwmaClosed : vwmaLive
 
 // 15s WMA(200)
 wma15 = request.security(syminfo.tickerid, wmaTF, ta.wma(close, wmaLen), lookahead = barmerge.lookahead_off)
+
+// ───────────────────────────── MACDs ─────────────────────────────
+// Each call returns MACD line, signal line and histogram for A, B and C.
+// `off` = 1 shifts to the previous (closed) bar for the non-repainting 5m option.
+f_macd3(int off) =>
+    [ma, sa, ha] = ta.macd(close, mAf, mAs, mAg)
+    [mb, sb, hb] = ta.macd(close, mBf, mBs, mBg)
+    [mc, sc, hc] = ta.macd(close, mCf, mCs, mCg)
+    [ma[off], sa[off], ha[off], mb[off], sb[off], hb[off], mc[off], sc[off], hc[off]]
+
+macdOff1  = noRepaint ? 1 : 0
+macdLook1 = noRepaint ? barmerge.lookahead_on : barmerge.lookahead_off
+
+// Set 1 (5m) and Set 2 (15s)
+[m1a, s1a, h1a, m1b, s1b, h1b, m1c, s1c, h1c] = request.security(syminfo.tickerid, macdTF1, f_macd3(macdOff1), lookahead = macdLook1)
+[m2a, s2a, h2a, m2b, s2b, h2b, m2c, s2c, h2c] = request.security(syminfo.tickerid, macdTF2, f_macd3(0), lookahead = barmerge.lookahead_off)
 
 ready = not na(vwma5) and not na(wma15)
 
@@ -113,6 +145,24 @@ plot(distVwmaPts, "Price vs VWMA (pts)", display = display.data_window)
 plot(distWmaPts,  "Price vs WMA (pts)",  display = display.data_window)
 plot(spreadPct,   "VWMA - WMA spread %", display = display.data_window)
 plot(vwmaAbove ? 1 : vwmaBelow ? -1 : 0, "Order (1 = VWMA above, -1 = below)", display = display.data_window)
+plot(m1a, "Set1 A MACD",   display = display.data_window)
+plot(s1a, "Set1 A signal", display = display.data_window)
+plot(h1a, "Set1 A hist",   display = display.data_window)
+plot(m1b, "Set1 B MACD",   display = display.data_window)
+plot(s1b, "Set1 B signal", display = display.data_window)
+plot(h1b, "Set1 B hist",   display = display.data_window)
+plot(m1c, "Set1 C MACD",   display = display.data_window)
+plot(s1c, "Set1 C signal", display = display.data_window)
+plot(h1c, "Set1 C hist",   display = display.data_window)
+plot(m2a, "Set2 A MACD",   display = display.data_window)
+plot(s2a, "Set2 A signal", display = display.data_window)
+plot(h2a, "Set2 A hist",   display = display.data_window)
+plot(m2b, "Set2 B MACD",   display = display.data_window)
+plot(s2b, "Set2 B signal", display = display.data_window)
+plot(h2b, "Set2 B hist",   display = display.data_window)
+plot(m2c, "Set2 C MACD",   display = display.data_window)
+plot(s2c, "Set2 C signal", display = display.data_window)
+plot(h2c, "Set2 C hist",   display = display.data_window)
 
 // ───────────────────────────── Table ─────────────────────────────
 f_pos(s) =>
@@ -174,6 +224,41 @@ if showTable and barstate.islast
     f_cell(1, 8, "VWMA<WMA + cross down", color.gray)
     f_cell(2, 8, shortCross ? "✔ ACTIVE" : shortWatch ? "WATCH (near VWMA)" : vwmaBelow ? "waiting for cross" : "✘ order bullish",
          shortCross ? colBear : shortWatch ? color.orange : color.gray)
+
+// ───────────────────────────── MACD table ─────────────────────────────
+var table macdTbl = table.new(f_pos(macdPos), 6, 7, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+f_mcell(c, r, txt, tc) =>
+    table.cell(macdTbl, c, r, txt, text_color = tc, text_size = size.small, text_halign = text.align_left)
+
+f_num(x) =>
+    na(x) ? "n/a" : str.tostring(x, "+0.0000;-0.0000")
+
+f_macdRow(r, tf, f, sl, g, m, sg, h) =>
+    aboveSig = m > sg
+    aboveZero = m > 0
+    state = na(m) or na(sg) ? "n/a" : (aboveSig ? "above signal" : m < sg ? "below signal" : "on signal") + " · " + (aboveZero ? "above 0" : m < 0 ? "below 0" : "at 0")
+    stateCol = na(m) or na(sg) ? color.gray : aboveSig and aboveZero ? colBull : m < sg and m < 0 ? colBear : color.yellow
+    f_mcell(0, r, tf, color.white)
+    f_mcell(1, r, str.tostring(f) + "/" + str.tostring(sl) + "/" + str.tostring(g), color.white)
+    f_mcell(2, r, f_num(m),  color.white)
+    f_mcell(3, r, f_num(sg), color.white)
+    f_mcell(4, r, f_num(h),  na(h) ? color.gray : h >= 0 ? colBull : colBear)
+    f_mcell(5, r, state, stateCol)
+
+if showMacdT and barstate.islast
+    f_mcell(0, 0, "TF",       color.gray)
+    f_mcell(1, 0, "MACD",     color.gray)
+    f_mcell(2, 0, "Line",     color.gray)
+    f_mcell(3, 0, "Signal",   color.gray)
+    f_mcell(4, 0, "Hist",     color.gray)
+    f_mcell(5, 0, "State",    color.gray)
+    f_macdRow(1, macdTF1, mAf, mAs, mAg, m1a, s1a, h1a)
+    f_macdRow(2, macdTF1, mBf, mBs, mBg, m1b, s1b, h1b)
+    f_macdRow(3, macdTF1, mCf, mCs, mCg, m1c, s1c, h1c)
+    f_macdRow(4, macdTF2, mAf, mAs, mAg, m2a, s2a, h2a)
+    f_macdRow(5, macdTF2, mBf, mBs, mBg, m2b, s2b, h2b)
+    f_macdRow(6, macdTF2, mCf, mCs, mCg, m2c, s2c, h2c)
 
 // ───────────────────────────── Alerts ─────────────────────────────
 alertcondition(longSetup,  "LONG setup",           "LONG setup: 5m VWMA > 15s WMA and price crossed UP through 5m VWMA")
