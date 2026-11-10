@@ -37,6 +37,10 @@ nearPct   = input.float(0.10, "'Near' threshold (%)", minval = 0.0, step = 0.01,
 showShort = input.bool(false, "Also show mirrored SHORT setups", group = grpSig)
 gapThr    = input.float(0.10, "Tight gap threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
      tooltip = "The averages count as TIGHT when the gap between the 5m VWMA and the 15s WMA is this % or less (either side).")
+gapIdealThr = input.float(0.06, "Ideal gap threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
+     tooltip = "The averages count as IDEAL when the gap is this % or less (either side). Setups here are graded A+.")
+gapReq    = input.string("Tight or better", "Gap required for setups", options = ["Tight or better", "Ideal only", "None (grade only)"], group = grpSig,
+     tooltip = "Tight or better: setups only fire when the gap is at or below the tight threshold (0.10%).\nIdeal only: only at or below the ideal threshold (0.06%).\nNone: setups fire at any gap, labelled with a grade.\nGrades: A+ = ideal gap, A = tight gap, B = wider.")
 
 grpMacd   = "MACDs"
 macdTF1   = input.timeframe("5",   "Set 1 timeframe", group = grpMacd)
@@ -135,6 +139,9 @@ vwmaAbove = vwma5 > wma15
 vwmaBelow = vwma5 < wma15
 spreadPct = (vwma5 - wma15) / wma15 * 100.0
 gapTight  = ready and math.abs(spreadPct) <= gapThr     // averages within the tight-gap threshold
+gapIdeal  = ready and math.abs(spreadPct) <= gapIdealThr  // averages within the ideal-gap threshold
+gapGate   = gapReq == "Tight or better" ? gapTight : gapReq == "Ideal only" ? gapIdeal : true
+gapGrade  = gapIdeal ? "A+" : gapTight ? "A" : "B"
 orderFlipBull = ready and vwmaAbove and not vwmaAbove[1]
 orderFlipBear = ready and vwmaBelow and not vwmaBelow[1]
 
@@ -151,11 +158,12 @@ crossDown  = ready and (crossMode == "Close crosses" ? closeXDn : pierceDn)
 // ───────────────────────────── Setups ─────────────────────────────
 longBase   = crossUp and vwmaAbove                      // VWMA/WMA part of the long
 shortBase  = crossDown and vwmaBelow
-longSetup  = longBase and macdLongGate                  // optimum long (with MACD filter)
-shortCross = shortBase and macdShortGate                // short setup condition, independent of the display toggle
+longSetup  = longBase and macdLongGate and gapGate      // optimum long (MACD filter + gap requirement)
+shortCross = shortBase and macdShortGate and gapGate    // short setup condition, independent of the display toggle
 shortSetup = showShort and shortCross                   // mirrored short (optional display)
-longBlocked  = longBase and not macdLongGate            // cross happened but MACDs said no
-shortBlocked = shortBase and not macdShortGate
+longBlocked  = longBase and not longSetup               // cross happened but MACDs and/or gap said no
+shortBlocked = shortBase and not shortCross
+f_blockTxt(macdOk) => "✘ blocked by " + (not macdOk and not gapGate ? "MACDs + gap" : not macdOk ? "MACDs" : "gap " + str.tostring(math.abs(spreadPct), "0.000") + "%")
 longWatch  = ready and vwmaAbove and nearVwma and not longSetup   // bullish order, price sitting on the VWMA
 shortWatch = ready and vwmaBelow and nearVwma and not shortCross  // bearish order, price sitting on the VWMA
 
@@ -166,8 +174,12 @@ fill(pV, pW, color = showFill ? (vwmaAbove ? color.new(colBull, 85) : color.new(
 
 plotshape(showCross and crossUp   and not longSetup,  "VWMA cross up",   shape.triangleup,   location.belowbar, color.new(colBull, 40), size = size.tiny)
 plotshape(showCross and crossDown and not shortSetup, "VWMA cross down", shape.triangledown, location.abovebar, color.new(colBear, 40), size = size.tiny)
-plotshape(longSetup,  "LONG setup",  shape.labelup,   location.belowbar, colBull, text = "LONG",  textcolor = color.white, size = size.small)
-plotshape(shortSetup, "SHORT setup", shape.labeldown, location.abovebar, colBear, text = "SHORT", textcolor = color.white, size = size.small)
+plotshape(longSetup and gapIdeal,                  "LONG setup A+", shape.labelup, location.belowbar, colBull, text = "LONG A+", textcolor = color.white, size = size.small)
+plotshape(longSetup and gapTight and not gapIdeal,  "LONG setup A",  shape.labelup, location.belowbar, color.new(colBull, 25), text = "LONG A", textcolor = color.white, size = size.small)
+plotshape(longSetup and not gapTight,               "LONG setup B",  shape.labelup, location.belowbar, color.new(colBull, 55), text = "LONG B", textcolor = color.white, size = size.small)
+plotshape(shortSetup and gapIdeal,                 "SHORT setup A+", shape.labeldown, location.abovebar, colBear, text = "SHORT A+", textcolor = color.white, size = size.small)
+plotshape(shortSetup and gapTight and not gapIdeal, "SHORT setup A",  shape.labeldown, location.abovebar, color.new(colBear, 25), text = "SHORT A", textcolor = color.white, size = size.small)
+plotshape(shortSetup and not gapTight,              "SHORT setup B",  shape.labeldown, location.abovebar, color.new(colBear, 55), text = "SHORT B", textcolor = color.white, size = size.small)
 
 bgcolor(showBg and longSetup  ? color.new(colBull, 85) : na, title = "Long setup bg")
 bgcolor(showBg and shortSetup ? color.new(colBear, 85) : na, title = "Short setup bg")
@@ -243,20 +255,20 @@ if showTable and barstate.islast
 
     f_cell(0, 5, "MA order", txtCol)
     f_cell(1, 5, (vwmaAbove ? "VWMA > WMA" : vwmaBelow ? "VWMA < WMA" : "VWMA = WMA") + "  (" + str.tostring(spreadPct, fmtPct) + "%)", txtCol)
-    f_cell(2, 5, (vwmaAbove ? "BULLISH" : vwmaBelow ? "BEARISH" : "FLAT") + (gapTight ? " · TIGHT" : ""), gapTight ? color.yellow : vwmaAbove ? colBull : vwmaBelow ? colBear : color.gray)
+    f_cell(2, 5, (vwmaAbove ? "BULLISH" : vwmaBelow ? "BEARISH" : "FLAT") + (gapIdeal ? " · IDEAL" : gapTight ? " · TIGHT" : ""), gapTight ? color.yellow : vwmaAbove ? colBull : vwmaBelow ? colBear : color.gray)
 
     f_cell(0, 6, "VWMA cross", txtCol)
     f_cell(1, 6, na(barsSinceX) ? "none yet" : (lastXUp ? "UP " : "DOWN ") + str.tostring(barsSinceX) + " bars ago", txtCol)
     f_cell(2, 6, crossUp ? "CROSSING UP" : crossDown ? "CROSSING DN" : "—", crossUp ? colBull : crossDown ? colBear : color.gray)
 
     f_cell(0, 7, "LONG setup", txtCol)
-    f_cell(1, 7, "VWMA>WMA + cross up" + (useMacd ? " + MACDs" : ""), color.gray)
-    f_cell(2, 7, longSetup ? "✔ ACTIVE" : longBlocked ? "✘ blocked by MACDs" : longWatch ? "WATCH (near VWMA)" : vwmaAbove ? "waiting for cross" : "✘ order bearish",
+    f_cell(1, 7, "VWMA>WMA + cross up" + (useMacd ? " + MACDs" : "") + (gapReq == "Tight or better" ? " + gap≤" + str.tostring(gapThr) + "%" : gapReq == "Ideal only" ? " + gap≤" + str.tostring(gapIdealThr) + "%" : ""), color.gray)
+    f_cell(2, 7, longSetup ? "✔ ACTIVE " + gapGrade : longBlocked ? f_blockTxt(macdLongGate) : longWatch ? "WATCH (near VWMA)" : vwmaAbove ? "waiting for cross" : "✘ order bearish",
          longSetup ? colBull : longBlocked ? colBear : longWatch ? color.yellow : color.gray)
 
     f_cell(0, 8, "SHORT setup", txtCol)
-    f_cell(1, 8, "VWMA<WMA + cross down" + (useMacd ? " + MACDs" : ""), color.gray)
-    f_cell(2, 8, shortCross ? "✔ ACTIVE" : shortBlocked ? "✘ blocked by MACDs" : shortWatch ? "WATCH (near VWMA)" : vwmaBelow ? "waiting for cross" : "✘ order bullish",
+    f_cell(1, 8, "VWMA<WMA + cross down" + (useMacd ? " + MACDs" : "") + (gapReq == "Tight or better" ? " + gap≤" + str.tostring(gapThr) + "%" : gapReq == "Ideal only" ? " + gap≤" + str.tostring(gapIdealThr) + "%" : ""), color.gray)
+    f_cell(2, 8, shortCross ? "✔ ACTIVE " + gapGrade : shortBlocked ? f_blockTxt(macdShortGate) : shortWatch ? "WATCH (near VWMA)" : vwmaBelow ? "waiting for cross" : "✘ order bullish",
          shortCross ? colBear : shortBlocked ? colBull : shortWatch ? color.orange : color.gray)
 
 // ───────────────────────────── MACD table ─────────────────────────────
@@ -321,3 +333,6 @@ alertcondition(orderFlipBear, "VWMA moved below WMA", "5m VWMA crossed BELOW the
 alertcondition(longWatch and not longWatch[1], "Long watch", "Bullish order and price is near the 5m VWMA")
 alertcondition(shortWatch and not shortWatch[1], "Short watch", "Bearish order and price is near the 5m VWMA")
 alertcondition(gapTight and not gapTight[1], "Averages gap tight", "Gap between 5m VWMA and 15s WMA is at or below the tight-gap threshold")
+alertcondition(gapIdeal and not gapIdeal[1], "Averages gap ideal", "Gap between 5m VWMA and 15s WMA is at or below the ideal-gap threshold")
+alertcondition(longSetup and gapIdeal,  "LONG setup A+ (ideal gap)",  "LONG setup A+: all conditions met and the VWMA/WMA gap is at or below the ideal threshold")
+alertcondition(shortSetup and gapIdeal, "SHORT setup A+ (ideal gap)", "SHORT setup A+: all conditions met and the VWMA/WMA gap is at or below the ideal threshold")
