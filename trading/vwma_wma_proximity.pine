@@ -50,6 +50,10 @@ mBg = input.int(12, "signal",       minval = 1, group = grpMacd, inline = "mB")
 mCf = input.int(72, "MACD C  fast", minval = 1, group = grpMacd, inline = "mC")
 mCs = input.int(200, "slow",        minval = 1, group = grpMacd, inline = "mC")
 mCg = input.int(12, "signal",       minval = 1, group = grpMacd, inline = "mC")
+useMacd   = input.bool(true, "Require MACD filter for LONG / SHORT setups", group = grpMacd,
+     tooltip = "LONG needs:\n• 5m set: at least 2 of 3 green, OR the 72/200/12 green\n• 15s set: all 3 green\nSHORT uses the mirror image (red).")
+greenMode = input.string("Histogram > 0", "A MACD counts as green when", options = ["Histogram > 0", "Histogram > 0 and MACD > 0"], group = grpMacd,
+     tooltip = "Histogram > 0: MACD line is above its signal line.\nHistogram > 0 and MACD > 0: also requires the MACD line to be above zero.\nRed is the mirror image.")
 
 grpVis    = "Display"
 showFill  = input.bool(true,  "Fill between averages (color = which is on top)", group = grpVis)
@@ -90,6 +94,32 @@ macdLook1 = noRepaint ? barmerge.lookahead_on : barmerge.lookahead_off
 [m1a, s1a, h1a, m1b, s1b, h1b, m1c, s1c, h1c] = request.security(syminfo.tickerid, macdTF1, f_macd3(macdOff1), lookahead = macdLook1)
 [m2a, s2a, h2a, m2b, s2b, h2b, m2c, s2c, h2c] = request.security(syminfo.tickerid, macdTF2, f_macd3(0), lookahead = barmerge.lookahead_off)
 
+// Green / red per MACD (see "A MACD counts as green when")
+f_green(m, sg) => greenMode == "Histogram > 0" ? m > sg : m > sg and m > 0
+f_red(m, sg)   => greenMode == "Histogram > 0" ? m < sg : m < sg and m < 0
+
+g1a = f_green(m1a, s1a), g1b = f_green(m1b, s1b), g1c = f_green(m1c, s1c)
+r1a = f_red(m1a, s1a),   r1b = f_red(m1b, s1b),   r1c = f_red(m1c, s1c)
+g2a = f_green(m2a, s2a), g2b = f_green(m2b, s2b), g2c = f_green(m2c, s2c)
+r2a = f_red(m2a, s2a),   r2b = f_red(m2b, s2b),   r2c = f_red(m2c, s2c)
+
+greens1 = (g1a ? 1 : 0) + (g1b ? 1 : 0) + (g1c ? 1 : 0)
+reds1   = (r1a ? 1 : 0) + (r1b ? 1 : 0) + (r1c ? 1 : 0)
+greens2 = (g2a ? 1 : 0) + (g2b ? 1 : 0) + (g2c ? 1 : 0)
+reds2   = (r2a ? 1 : 0) + (r2b ? 1 : 0) + (r2c ? 1 : 0)
+
+// 5m set: at least 2 of 3 green, OR the 72/200/12 green
+macd5Long  = greens1 >= 2 or g1c
+macd5Short = reds1   >= 2 or r1c
+// 15s set: all 3 green (72/200/12 is the key one; shown separately in the table)
+macd15Long  = greens2 == 3
+macd15Short = reds2   == 3
+
+macdLongOK  = macd5Long  and macd15Long
+macdShortOK = macd5Short and macd15Short
+macdLongGate  = not useMacd or macdLongOK
+macdShortGate = not useMacd or macdShortOK
+
 ready = not na(vwma5) and not na(wma15)
 
 // ───────────────────────────── Closeness ─────────────────────────────
@@ -119,10 +149,14 @@ crossUp    = ready and (crossMode == "Close crosses" ? closeXUp : pierceUp)
 crossDown  = ready and (crossMode == "Close crosses" ? closeXDn : pierceDn)
 
 // ───────────────────────────── Setups ─────────────────────────────
-longSetup  = crossUp and vwmaAbove                      // optimum long
-shortSetup = showShort and crossDown and vwmaBelow      // mirrored short (optional)
+longBase   = crossUp and vwmaAbove                      // VWMA/WMA part of the long
+shortBase  = crossDown and vwmaBelow
+longSetup  = longBase and macdLongGate                  // optimum long (with MACD filter)
+shortCross = shortBase and macdShortGate                // short setup condition, independent of the display toggle
+shortSetup = showShort and shortCross                   // mirrored short (optional display)
+longBlocked  = longBase and not macdLongGate            // cross happened but MACDs said no
+shortBlocked = shortBase and not macdShortGate
 longWatch  = ready and vwmaAbove and nearVwma and not longSetup   // bullish order, price sitting on the VWMA
-shortCross = crossDown and vwmaBelow                    // short setup condition, independent of the display toggle
 shortWatch = ready and vwmaBelow and nearVwma and not shortCross  // bearish order, price sitting on the VWMA
 
 // ───────────────────────────── Plots ─────────────────────────────
@@ -216,17 +250,17 @@ if showTable and barstate.islast
     f_cell(2, 6, crossUp ? "CROSSING UP" : crossDown ? "CROSSING DN" : "—", crossUp ? colBull : crossDown ? colBear : color.gray)
 
     f_cell(0, 7, "LONG setup", txtCol)
-    f_cell(1, 7, "VWMA>WMA + cross up", color.gray)
-    f_cell(2, 7, longSetup ? "✔ ACTIVE" : longWatch ? "WATCH (near VWMA)" : vwmaAbove ? "waiting for cross" : "✘ order bearish",
-         longSetup ? colBull : longWatch ? color.yellow : color.gray)
+    f_cell(1, 7, "VWMA>WMA + cross up" + (useMacd ? " + MACDs" : ""), color.gray)
+    f_cell(2, 7, longSetup ? "✔ ACTIVE" : longBlocked ? "✘ blocked by MACDs" : longWatch ? "WATCH (near VWMA)" : vwmaAbove ? "waiting for cross" : "✘ order bearish",
+         longSetup ? colBull : longBlocked ? colBear : longWatch ? color.yellow : color.gray)
 
     f_cell(0, 8, "SHORT setup", txtCol)
-    f_cell(1, 8, "VWMA<WMA + cross down", color.gray)
-    f_cell(2, 8, shortCross ? "✔ ACTIVE" : shortWatch ? "WATCH (near VWMA)" : vwmaBelow ? "waiting for cross" : "✘ order bullish",
-         shortCross ? colBear : shortWatch ? color.orange : color.gray)
+    f_cell(1, 8, "VWMA<WMA + cross down" + (useMacd ? " + MACDs" : ""), color.gray)
+    f_cell(2, 8, shortCross ? "✔ ACTIVE" : shortBlocked ? "✘ blocked by MACDs" : shortWatch ? "WATCH (near VWMA)" : vwmaBelow ? "waiting for cross" : "✘ order bullish",
+         shortCross ? colBear : shortBlocked ? colBull : shortWatch ? color.orange : color.gray)
 
 // ───────────────────────────── MACD table ─────────────────────────────
-var table macdTbl = table.new(f_pos(macdPos), 6, 7, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table macdTbl = table.new(f_pos(macdPos), 6, 9, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 
 f_mcell(c, r, txt, tc) =>
     table.cell(macdTbl, c, r, txt, text_color = tc, text_size = size.small, text_halign = text.align_left)
@@ -238,7 +272,7 @@ f_macdRow(r, tf, f, sl, g, m, sg, h) =>
     aboveSig = m > sg
     aboveZero = m > 0
     state = na(m) or na(sg) ? "n/a" : (aboveSig ? "above signal" : m < sg ? "below signal" : "on signal") + " · " + (aboveZero ? "above 0" : m < 0 ? "below 0" : "at 0")
-    stateCol = na(m) or na(sg) ? color.gray : aboveSig and aboveZero ? colBull : m < sg and m < 0 ? colBear : color.yellow
+    stateCol = f_green(m, sg) ? colBull : f_red(m, sg) ? colBear : na(m) or na(sg) ? color.gray : color.yellow
     f_mcell(0, r, tf, color.white)
     f_mcell(1, r, str.tostring(f) + "/" + str.tostring(sl) + "/" + str.tostring(g), color.white)
     f_mcell(2, r, f_num(m),  color.white)
@@ -260,9 +294,26 @@ if showMacdT and barstate.islast
     f_macdRow(5, macdTF2, mBf, mBs, mBg, m2b, s2b, h2b)
     f_macdRow(6, macdTF2, mCf, mCs, mCg, m2c, s2c, h2c)
 
+    // Filter summary rows
+    f_mcell(0, 7, macdTF1 + " filter", color.white)
+    f_mcell(1, 7, "≥2 green or C green", color.gray)
+    f_mcell(2, 7, str.tostring(greens1) + "/3 green", color.white)
+    f_mcell(3, 7, "C " + (g1c ? "✔" : "✘"), g1c ? colBull : colBear)
+    f_mcell(4, 7, macd5Long ? "LONG ✔" : "LONG ✘", macd5Long ? colBull : color.gray)
+    f_mcell(5, 7, macd5Short ? "SHORT ✔" : "SHORT ✘", macd5Short ? colBear : color.gray)
+
+    f_mcell(0, 8, macdTF2 + " filter", color.white)
+    f_mcell(1, 8, "all 3 green (C key)", color.gray)
+    f_mcell(2, 8, str.tostring(greens2) + "/3 green", color.white)
+    f_mcell(3, 8, "C " + (g2c ? "✔" : "✘"), g2c ? colBull : colBear)
+    f_mcell(4, 8, macd15Long ? "LONG ✔" : g2c ? "LONG partial (C ✔)" : "LONG ✘", macd15Long ? colBull : g2c ? color.yellow : color.gray)
+    f_mcell(5, 8, macd15Short ? "SHORT ✔" : r2c ? "SHORT partial (C ✔)" : "SHORT ✘", macd15Short ? colBear : r2c ? color.orange : color.gray)
+
 // ───────────────────────────── Alerts ─────────────────────────────
-alertcondition(longSetup,  "LONG setup",           "LONG setup: 5m VWMA > 15s WMA and price crossed UP through 5m VWMA")
-alertcondition(shortSetup, "SHORT setup",          "SHORT setup: 5m VWMA < 15s WMA and price crossed DOWN through 5m VWMA")
+alertcondition(longSetup,  "LONG setup",           "LONG setup: 5m VWMA > 15s WMA, price crossed UP through 5m VWMA, MACD filter passed (if enabled)")
+alertcondition(shortSetup, "SHORT setup",          "SHORT setup: 5m VWMA < 15s WMA, price crossed DOWN through 5m VWMA, MACD filter passed (if enabled)")
+alertcondition(macdLongOK and not macdLongOK[1], "MACD long filter passed", "MACDs now pass the LONG filter (5m: 2+ green or 72/200/12 green; 15s: all 3 green)")
+alertcondition(macdShortOK and not macdShortOK[1], "MACD short filter passed", "MACDs now pass the SHORT filter (5m: 2+ red or 72/200/12 red; 15s: all 3 red)")
 alertcondition(crossUp,    "Price crossed above 5m VWMA", "Price crossed ABOVE the 5m VWMA")
 alertcondition(crossDown,  "Price crossed below 5m VWMA", "Price crossed BELOW the 5m VWMA")
 alertcondition(orderFlipBull, "VWMA moved above WMA", "5m VWMA crossed ABOVE the 15s WMA (bullish order)")
