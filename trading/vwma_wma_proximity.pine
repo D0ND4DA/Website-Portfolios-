@@ -34,6 +34,8 @@ crossMode = input.string("Close crosses", "Cross definition", options = ["Close 
 nearPct   = input.float(0.10, "'Near' threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
      tooltip = "Price is flagged NEAR an average when it is within this % of it.")
 showShort = input.bool(false, "Also show mirrored SHORT setups", group = grpSig)
+gapThr    = input.float(0.10, "Tight gap threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
+     tooltip = "The averages count as TIGHT when the gap between the 5m VWMA and the 15s WMA is this % or less (either side).")
 
 grpVis    = "Display"
 showFill  = input.bool(true,  "Fill between averages (color = which is on top)", group = grpVis)
@@ -70,6 +72,7 @@ nearWma     = math.abs(distWmaPct)  <= nearPct
 vwmaAbove = vwma5 > wma15
 vwmaBelow = vwma5 < wma15
 spreadPct = (vwma5 - wma15) / wma15 * 100.0
+gapTight  = ready and math.abs(spreadPct) <= gapThr     // averages within the tight-gap threshold
 orderFlipBull = ready and vwmaAbove and not vwmaAbove[1]
 orderFlipBear = ready and vwmaBelow and not vwmaBelow[1]
 
@@ -156,7 +159,7 @@ if showTable and barstate.islast
 
     f_cell(0, 5, "MA order", txtCol)
     f_cell(1, 5, (vwmaAbove ? "VWMA > WMA" : vwmaBelow ? "VWMA < WMA" : "VWMA = WMA") + "  (" + str.tostring(spreadPct, fmtPct) + "%)", txtCol)
-    f_cell(2, 5, vwmaAbove ? "BULLISH" : vwmaBelow ? "BEARISH" : "FLAT", vwmaAbove ? colBull : vwmaBelow ? colBear : color.gray)
+    f_cell(2, 5, (vwmaAbove ? "BULLISH" : vwmaBelow ? "BEARISH" : "FLAT") + (gapTight ? " · TIGHT" : ""), gapTight ? color.yellow : vwmaAbove ? colBull : vwmaBelow ? colBear : color.gray)
 
     f_cell(0, 6, "VWMA cross", txtCol)
     f_cell(1, 6, na(barsSinceX) ? "none yet" : (lastXUp ? "UP " : "DOWN ") + str.tostring(barsSinceX) + " bars ago", txtCol)
@@ -181,3 +184,4 @@ alertcondition(orderFlipBull, "VWMA moved above WMA", "5m VWMA crossed ABOVE the
 alertcondition(orderFlipBear, "VWMA moved below WMA", "5m VWMA crossed BELOW the 15s WMA (bearish order)")
 alertcondition(longWatch and not longWatch[1], "Long watch", "Bullish order and price is near the 5m VWMA")
 alertcondition(shortWatch and not shortWatch[1], "Short watch", "Bearish order and price is near the 5m VWMA")
+alertcondition(gapTight and not gapTight[1], "Averages gap tight", "Gap between 5m VWMA and 15s WMA is at or below the tight-gap threshold")
