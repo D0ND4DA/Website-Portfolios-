@@ -37,7 +37,8 @@ crossMode = input.string("Close crosses", "Cross definition", options = ["Close 
      tooltip = "Close crosses: close moves from one side of the VWMA to the other.\nBar pierces: the bar's high/low range touches the VWMA and it closes on one side.")
 nearPct   = input.float(0.10, "'Near' threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
      tooltip = "Price is flagged NEAR an average when it is within this % of it.")
-showShort = input.bool(false, "Also show mirrored SHORT setups", group = grpSig)
+showShort = input.bool(true, "Show SHORT setups on the chart", group = grpSig,
+     tooltip = "Controls the SHORT setup labels, setup background and SHORT setup alerts.\nSHORT trend dots and background are controlled in the Trend riding section.")
 gapThr    = input.float(0.10, "Tight gap threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
      tooltip = "The averages count as TIGHT when the gap between the 5m VWMA and the 15s WMA is this % or less (either side).")
 gapIdealThr = input.float(0.06, "Ideal gap threshold (%)", minval = 0.0, step = 0.01, group = grpSig,
@@ -59,6 +60,8 @@ mCs = input.int(200, "slow",        minval = 1, group = grpMacd, inline = "mC")
 mCg = input.int(12, "signal",       minval = 1, group = grpMacd, inline = "mC")
 useMacd   = input.bool(true, "Require MACD filter for LONG / SHORT setups", group = grpMacd,
      tooltip = "LONG needs:\n• 5m set: at least 2 of 3 green, OR the 72/200/12 green\n• 15s set: all 3 green\nSHORT uses the mirror image (red).")
+sigType   = input.string("SMA", "Signal line MA type", options = ["SMA", "EMA"], group = grpMacd,
+     tooltip = "How the signal line is smoothed. SMA matches the MACD indicators on your chart; EMA is the classic MACD (ta.macd).")
 greenMode = input.string("Histogram > 0", "A MACD counts as green when", options = ["Histogram > 0", "Histogram > 0 and MACD > 0"], group = grpMacd,
      tooltip = "Histogram > 0: MACD line is above its signal line.\nHistogram > 0 and MACD > 0: also requires the MACD line to be above zero.\nRed is the mirror image.")
 
@@ -114,10 +117,18 @@ vwShortGate = not useVwStack or vwFastAbove
 // ───────────────────────────── MACDs ─────────────────────────────
 // Each call returns MACD line, signal line and histogram for A, B and C.
 // `off` = 1 shifts to the previous (closed) bar for the non-repainting 5m option.
+// MACD line = EMA(fast) - EMA(slow); signal line = SMA or EMA of the MACD line (see "Signal line MA type")
+f_macd(int fastLen, int slowLen, int sigLen) =>
+    m      = ta.ema(close, fastLen) - ta.ema(close, slowLen)
+    sigSma = ta.sma(m, sigLen)
+    sigEma = ta.ema(m, sigLen)
+    sg     = sigType == "SMA" ? sigSma : sigEma
+    [m, sg, m - sg]
+
 f_macd3(int off) =>
-    [ma, sa, ha] = ta.macd(close, mAf, mAs, mAg)
-    [mb, sb, hb] = ta.macd(close, mBf, mBs, mBg)
-    [mc, sc, hc] = ta.macd(close, mCf, mCs, mCg)
+    [ma, sa, ha] = f_macd(mAf, mAs, mAg)
+    [mb, sb, hb] = f_macd(mBf, mBs, mBg)
+    [mc, sc, hc] = f_macd(mCf, mCs, mCg)
     [ma[off], sa[off], ha[off], mb[off], sb[off], hb[off], mc[off], sc[off], hc[off]]
 
 macdOff1  = noRepaint ? 1 : 0
@@ -243,7 +254,7 @@ plotshape(showCross and crossUp   and not longSetup,  "VWMA cross up",   shape.t
 plotshape(showCross and crossDown and not shortSetup, "VWMA cross down", shape.triangledown, location.abovebar, color.new(colBear, 40), size = size.tiny)
 // Trend criteria met: a dot under (long) / over (short) every qualifying bar
 plotshape(showTrDot and trendLong,                "LONG trend criteria met",  shape.circle, location.belowbar, colBull, size = size.tiny)
-plotshape(showTrDot and showShort and trendShort, "SHORT trend criteria met", shape.circle, location.abovebar, colBear, size = size.tiny)
+plotshape(showTrDot and trendShort, "SHORT trend criteria met", shape.circle, location.abovebar, colBear, size = size.tiny)
 
 // Setup labels (labels don't count toward TradingView's 64-plot limit)
 f_gradeCol(c) => gapIdeal ? c : gapTight ? color.new(c, 25) : color.new(c, 55)
@@ -255,7 +266,7 @@ if shortSetup
 bgcolor(showBg and longSetup  ? color.new(colBull, 85) : na, title = "Long setup bg")
 bgcolor(showBg and shortSetup ? color.new(colBear, 85) : na, title = "Short setup bg")
 bgcolor(showTrBg and trendLong ? color.new(colBull, 93) : na, title = "Long trend bg")
-bgcolor(showTrBg and showShort and trendShort ? color.new(colBear, 93) : na, title = "Short trend bg")
+bgcolor(showTrBg and trendShort ? color.new(colBear, 93) : na, title = "Short trend bg")
 
 // Data-window values (hidden on chart)
 plot(distVwmaPct, "Price vs VWMA %", display = display.data_window)
