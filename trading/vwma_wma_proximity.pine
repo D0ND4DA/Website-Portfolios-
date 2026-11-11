@@ -77,6 +77,7 @@ trTF      = input.timeframe("15", "Trend WMA timeframe", group = grpTr)
 trLen     = input.int(21, "Trend WMA length", minval = 1, group = grpTr)
 showTrWma = input.bool(true, "Plot the trend WMA", group = grpTr)
 showTrBg  = input.bool(true, "Shade background while a trend is being ridden", group = grpTr)
+showTrDot = input.bool(true, "Mark every bar where the trend criteria are met", group = grpTr)
 colTrWma  = input.color(color.new(#FFEB3B, 0), "Trend WMA color", group = grpTr)
 
 grpVis    = "Display"
@@ -240,6 +241,10 @@ fill(pV, pW, color = showFill ? (vwmaAbove ? color.new(colBull, 85) : color.new(
 
 plotshape(showCross and crossUp   and not longSetup,  "VWMA cross up",   shape.triangleup,   location.belowbar, color.new(colBull, 40), size = size.tiny)
 plotshape(showCross and crossDown and not shortSetup, "VWMA cross down", shape.triangledown, location.abovebar, color.new(colBear, 40), size = size.tiny)
+// Trend criteria met: a dot under (long) / over (short) every qualifying bar
+plotshape(showTrDot and trendLong,                "LONG trend criteria met",  shape.circle, location.belowbar, colBull, size = size.tiny)
+plotshape(showTrDot and showShort and trendShort, "SHORT trend criteria met", shape.circle, location.abovebar, colBear, size = size.tiny)
+
 // Setup labels (labels don't count toward TradingView's 64-plot limit)
 f_gradeCol(c) => gapIdeal ? c : gapTight ? color.new(c, 25) : color.new(c, 55)
 if longSetup
