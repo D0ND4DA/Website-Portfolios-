@@ -240,12 +240,12 @@ fill(pV, pW, color = showFill ? (vwmaAbove ? color.new(colBull, 85) : color.new(
 
 plotshape(showCross and crossUp   and not longSetup,  "VWMA cross up",   shape.triangleup,   location.belowbar, color.new(colBull, 40), size = size.tiny)
 plotshape(showCross and crossDown and not shortSetup, "VWMA cross down", shape.triangledown, location.abovebar, color.new(colBear, 40), size = size.tiny)
-plotshape(longSetup and gapIdeal,                  "LONG setup A+", shape.labelup, location.belowbar, colBull, text = "LONG A+", textcolor = color.white, size = size.small)
-plotshape(longSetup and gapTight and not gapIdeal,  "LONG setup A",  shape.labelup, location.belowbar, color.new(colBull, 25), text = "LONG A", textcolor = color.white, size = size.small)
-plotshape(longSetup and not gapTight,               "LONG setup B",  shape.labelup, location.belowbar, color.new(colBull, 55), text = "LONG B", textcolor = color.white, size = size.small)
-plotshape(shortSetup and gapIdeal,                 "SHORT setup A+", shape.labeldown, location.abovebar, colBear, text = "SHORT A+", textcolor = color.white, size = size.small)
-plotshape(shortSetup and gapTight and not gapIdeal, "SHORT setup A",  shape.labeldown, location.abovebar, color.new(colBear, 25), text = "SHORT A", textcolor = color.white, size = size.small)
-plotshape(shortSetup and not gapTight,              "SHORT setup B",  shape.labeldown, location.abovebar, color.new(colBear, 55), text = "SHORT B", textcolor = color.white, size = size.small)
+// Setup labels (labels don't count toward TradingView's 64-plot limit)
+f_gradeCol(c) => gapIdeal ? c : gapTight ? color.new(c, 25) : color.new(c, 55)
+if longSetup
+    label.new(bar_index, low, "LONG " + gapGrade, yloc = yloc.belowbar, style = label.style_label_up, color = f_gradeCol(colBull), textcolor = color.white, size = size.small)
+if shortSetup
+    label.new(bar_index, high, "SHORT " + gapGrade, yloc = yloc.abovebar, style = label.style_label_down, color = f_gradeCol(colBear), textcolor = color.white, size = size.small)
 
 bgcolor(showBg and longSetup  ? color.new(colBull, 85) : na, title = "Long setup bg")
 bgcolor(showBg and shortSetup ? color.new(colBear, 85) : na, title = "Short setup bg")
@@ -262,24 +262,6 @@ plot(vwFast - vwSlow, "15s VWMA fast - slow (pts)", display = display.data_windo
 plot(trWma, "15m WMA value", display = display.data_window)
 plot(trendLong ? 1 : trendShort ? -1 : 0, "Trend state (1 long, -1 short)", display = display.data_window)
 plot(vwmaAbove ? 1 : vwmaBelow ? -1 : 0, "Order (1 = VWMA above, -1 = below)", display = display.data_window)
-plot(m1a, "Set1 A MACD",   display = display.data_window)
-plot(s1a, "Set1 A signal", display = display.data_window)
-plot(h1a, "Set1 A hist",   display = display.data_window)
-plot(m1b, "Set1 B MACD",   display = display.data_window)
-plot(s1b, "Set1 B signal", display = display.data_window)
-plot(h1b, "Set1 B hist",   display = display.data_window)
-plot(m1c, "Set1 C MACD",   display = display.data_window)
-plot(s1c, "Set1 C signal", display = display.data_window)
-plot(h1c, "Set1 C hist",   display = display.data_window)
-plot(m2a, "Set2 A MACD",   display = display.data_window)
-plot(s2a, "Set2 A signal", display = display.data_window)
-plot(h2a, "Set2 A hist",   display = display.data_window)
-plot(m2b, "Set2 B MACD",   display = display.data_window)
-plot(s2b, "Set2 B signal", display = display.data_window)
-plot(h2b, "Set2 B hist",   display = display.data_window)
-plot(m2c, "Set2 C MACD",   display = display.data_window)
-plot(s2c, "Set2 C signal", display = display.data_window)
-plot(h2c, "Set2 C hist",   display = display.data_window)
 
 // ───────────────────────────── Table ─────────────────────────────
 f_pos(s) =>
