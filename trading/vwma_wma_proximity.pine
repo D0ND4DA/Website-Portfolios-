@@ -13,7 +13,7 @@
 //  • 15s VWMA(21) and VWMA(72): LONG needs the 21 BELOW the 72
 //  • TREND (riding) state for LONG: price > 15m WMA(21), 15s WMA(200) > 5m VWMA,
 //    15s VWMA 21 < 72, 5m MACDs (2+ green or 72/200/12 green), 15s MACDs all green. SHORT = mirror.
-//  • Trading hours: 02:00-15:50 New York time, Mon-Fri, skipping 09:30-09:40 (first 10 min of the open).
+//  • Trading hours: 02:00-15:50 New York time, Sun-Fri, skipping 09:30-09:40 (first 10 min of the open).
 //
 // Notes
 //  • Seconds-based timeframes ("15S") need a TradingView plan with seconds data.
@@ -181,8 +181,8 @@ trWma = request.security(syminfo.tickerid, trTF, f_wmaOff(trLen, macdOff1), look
 ready = not na(vwma5) and not na(wma15)
 
 // ───────────────────────────── Trading hours ─────────────────────────────
-inMain    = not na(time(timeframe.period, sessMain + ":23456", sessTz))   // Mon-Fri trading window
-inSkip    = not na(time(timeframe.period, sessSkip + ":23456", sessTz))   // opening no-trade window
+inMain    = not na(time(timeframe.period, sessMain + ":123456", sessTz))   // Sun-Fri trading window
+inSkip    = not na(time(timeframe.period, sessSkip + ":123456", sessTz))   // opening no-trade window
 inSession = not useSess or (inMain and not inSkip)
 
 // ───────────────────────────── Closeness ─────────────────────────────
