@@ -93,6 +93,9 @@ sessSun   = input.session("1800-0000", "Sunday evening window", group = grpSess,
 sunToMon  = input.bool(true, "Carry Sunday evening straight into Monday", group = grpSess,
      tooltip = "On: Monday 00:00 up to the weekday window start (02:00) is also tradable, so Sunday 18:00 runs continuously into Monday's session.")
 sessSkip  = input.session("0930-0940", "No-trade window (first 10 min of the open)", group = grpSess)
+useMid    = input.bool(false, "Also skip midday", group = grpSess,
+     tooltip = "In the Nov 4-12 test, trend entries started 11:30-14:00 New York time lost money in both weeks. Off by default until more data confirms it.")
+sessMid   = input.session("1130-1400", "Midday no-trade window", group = grpSess)
 sessTz    = input.string("America/New_York", "Time zone", group = grpSess,
      tooltip = "IANA time zone name the windows are written in. America/New_York follows US daylight saving automatically.")
 showSessBg = input.bool(true, "Grey out bars outside trading hours", group = grpSess)
@@ -192,7 +195,10 @@ monStart  = str.substring(sessMain, 0, 4)
 inMonBridge = sunToMon and monStart != "0000" and not na(time(timeframe.period, "0000-" + monStart + ":2", sessTz))
 inMain    = inWeekday or inSunday or inMonBridge
 inSkip    = not na(time(timeframe.period, sessSkip + ":123456", sessTz))   // opening no-trade window
-inSession = not useSess or (inMain and not inSkip)
+inMid     = useMid and not na(time(timeframe.period, sessMid + ":23456", sessTz))   // optional midday no-trade window
+inBlock   = inSkip or inMid
+inSession = not useSess or (inMain and not inBlock)
+sessWhy   = inSkip ? "opening 10 min" : inMid ? "midday" : "outside hours"
 
 // ───────────────────────────── Closeness ─────────────────────────────
 distVwmaPct = (close - vwma5) / vwma5 * 100.0
@@ -235,7 +241,7 @@ f_blockTxt(macdOk, vwOk) =>
     r = not macdOk ? "MACDs" : ""
     r := not vwOk ? (r == "" ? "" : r + " + ") + str.tostring(vwFastLen) + "/" + str.tostring(vwSlowLen) : r
     r := not gapGate ? (r == "" ? "" : r + " + ") + "gap " + str.tostring(math.abs(spreadPct), "0.000") + "%" : r
-    r := not inSession ? (r == "" ? "" : r + " + ") + (inSkip ? "opening 10 min" : "outside hours") : r
+    r := not inSession ? (r == "" ? "" : r + " + ") + sessWhy : r
     "✘ blocked by " + r
 longWatch  = ready and inSession and vwmaAbove and nearVwma and not longSetup   // bullish order, price sitting on the VWMA
 shortWatch = ready and inSession and vwmaBelow and nearVwma and not shortCross  // bearish order, price sitting on the VWMA
@@ -294,17 +300,20 @@ bgcolor(showBg and longSetup  ? color.new(colBull, 85) : na, title = "Long setup
 bgcolor(showBg and shortSetup ? color.new(colBear, 85) : na, title = "Short setup bg")
 bgcolor(showTrBg and trendLong ? color.new(colBull, 93) : na, title = "Long trend bg")
 bgcolor(showTrBg and trendShort ? color.new(colBear, 93) : na, title = "Short trend bg")
-bgcolor(showSessBg and useSess and not (inMain and not inSkip) ? color.new(color.gray, 88) : na, title = "Outside trading hours")
+bgcolor(showSessBg and useSess and not (inMain and not inBlock) ? color.new(color.gray, 88) : na, title = "Outside trading hours")
 
 // Data-window values (hidden on chart)
 plot(distVwmaPct, "Price vs VWMA %", display = display.data_window)
-plot(distWmaPct,  "Price vs WMA %",  display = display.data_window)
 plot(distVwmaPts, "Price vs VWMA (pts)", display = display.data_window)
-plot(distWmaPts,  "Price vs WMA (pts)",  display = display.data_window)
 plot(spreadPct,   "VWMA - WMA spread %", display = display.data_window)
 plot(vwFast - vwSlow, "15s VWMA fast - slow (pts)", display = display.data_window)
-plot(trWma, "15m WMA value", display = display.data_window)
 plot(trendLong ? 1 : trendShort ? -1 : 0, "Trend state (1 long, -1 short)", display = display.data_window)
+// Export columns for trading/strategy_study.py (5m MACD histograms, setups, session)
+plot(h1a, "5m MACD A hist", display = display.data_window)
+plot(h1b, "5m MACD B hist", display = display.data_window)
+plot(h1c, "5m MACD C hist", display = display.data_window)
+plot(longSetup ? 1 : shortCross ? -1 : 0, "Setup (1 long, -1 short)", display = display.data_window)
+plot(inSession ? 1 : 0, "In session", display = display.data_window)
 plot(vwmaAbove ? 1 : vwmaBelow ? -1 : 0, "Order (1 = VWMA above, -1 = below)", display = display.data_window)
 
 // ───────────────────────────── Table ─────────────────────────────
@@ -374,15 +383,15 @@ if showTable and barstate.islast
 
     f_cell(0, 10, "LONG trend", txtCol)
     f_cell(1, 10, "px>" + trTF + "m WMA" + str.tostring(trLen) + " (" + f_pts(close - trWma) + "), WMA>VWMA, 21<72, MACDs", color.gray)
-    f_cell(2, 10, trendLong ? "✔ RIDING" : trendLongRaw ? "✘ " + (inSkip ? "opening 10 min" : "outside hours") : "✘ " + f_trMiss(tL1, tL2, tL3, tL4, tL5), trendLong ? colBull : color.gray)
+    f_cell(2, 10, trendLong ? "✔ RIDING" : trendLongRaw ? "✘ " + sessWhy : "✘ " + f_trMiss(tL1, tL2, tL3, tL4, tL5), trendLong ? colBull : color.gray)
 
     f_cell(0, 11, "SHORT trend", txtCol)
     f_cell(1, 11, "px<" + trTF + "m WMA" + str.tostring(trLen) + ", WMA<VWMA, 21>72, MACDs", color.gray)
-    f_cell(2, 11, trendShort ? "✔ RIDING" : trendShortRaw ? "✘ " + (inSkip ? "opening 10 min" : "outside hours") : "✘ " + f_trMiss(tS1, tS2, tS3, tS4, tS5), trendShort ? colBear : color.gray)
+    f_cell(2, 11, trendShort ? "✔ RIDING" : trendShortRaw ? "✘ " + sessWhy : "✘ " + f_trMiss(tS1, tS2, tS3, tS4, tS5), trendShort ? colBear : color.gray)
 
     f_cell(0, 12, "Trading hours", txtCol)
-    f_cell(1, 12, not useSess ? "filter off" : "Sun " + sessSun + (sunToMon ? " → Mon" : "") + ", Mon-Fri " + sessMain + " excl. " + sessSkip + " (" + sessTz + ")", color.gray)
-    f_cell(2, 12, not useSess ? "—" : inSkip and inMain ? "✘ OPENING 10 MIN" : inMain ? "✔ IN SESSION" : "✘ OUTSIDE HOURS", not useSess ? color.gray : inMain and not inSkip ? colBull : colBear)
+    f_cell(1, 12, not useSess ? "filter off" : "Sun " + sessSun + (sunToMon ? " → Mon" : "") + ", Mon-Fri " + sessMain + " excl. " + sessSkip + (useMid ? " & " + sessMid : "") + " (" + sessTz + ")", color.gray)
+    f_cell(2, 12, not useSess ? "—" : inSkip and inMain ? "✘ OPENING 10 MIN" : inMid and inMain ? "✘ MIDDAY" : inMain ? "✔ IN SESSION" : "✘ OUTSIDE HOURS", not useSess ? color.gray : inMain and not inBlock ? colBull : colBear)
 
 // ───────────────────────────── MACD table ─────────────────────────────
 var table macdTbl = table.new(f_pos(macdPos), 6, 9, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
