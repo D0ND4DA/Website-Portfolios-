@@ -13,7 +13,7 @@
 //  • 15s VWMA(21) and VWMA(72): LONG needs the 21 BELOW the 72
 //  • TREND (riding) state for LONG: price > 15m WMA(21), 15s WMA(200) > 5m VWMA,
 //    15s VWMA 21 < 72, 5m MACDs (2+ green or 72/200/12 green), 15s MACDs all green. SHORT = mirror.
-//  • Trading hours: 02:00-15:50 New York time, Sun-Fri, skipping 09:30-09:40 (first 10 min of the open).
+//  • Trading hours: Sun 18:00-24:00, then Mon-Fri 02:00-15:50 New York time, skipping 09:30-09:40 (first 10 min of the open).
 //
 // Notes
 //  • Seconds-based timeframes ("15S") need a TradingView plan with seconds data.
@@ -87,7 +87,9 @@ colTrWma  = input.color(color.new(#FFEB3B, 0), "Trend WMA color", group = grpTr)
 grpSess   = "Trading hours"
 useSess   = input.bool(true, "Only signal during trading hours", group = grpSess,
      tooltip = "Setups, watch states and trend states only fire inside the trading window and outside the no-trade window.")
-sessMain  = input.session("0200-1550", "Trading window", group = grpSess)
+sessMain  = input.session("0200-1550", "Weekday trading window (Mon-Fri)", group = grpSess)
+sessSun   = input.session("1800-0000", "Sunday evening window", group = grpSess,
+     tooltip = "Sunday trading starts at the 18:00 market open. 1800-0000 runs to midnight; the weekday window takes over from Monday 02:00.")
 sessSkip  = input.session("0930-0940", "No-trade window (first 10 min of the open)", group = grpSess)
 sessTz    = input.string("America/New_York", "Time zone", group = grpSess,
      tooltip = "IANA time zone name the windows are written in. America/New_York follows US daylight saving automatically.")
@@ -181,7 +183,9 @@ trWma = request.security(syminfo.tickerid, trTF, f_wmaOff(trLen, macdOff1), look
 ready = not na(vwma5) and not na(wma15)
 
 // ───────────────────────────── Trading hours ─────────────────────────────
-inMain    = not na(time(timeframe.period, sessMain + ":123456", sessTz))   // Sun-Fri trading window
+inWeekday = not na(time(timeframe.period, sessMain + ":23456", sessTz))    // Mon-Fri trading window
+inSunday  = not na(time(timeframe.period, sessSun + ":1", sessTz))         // Sunday evening window
+inMain    = inWeekday or inSunday
 inSkip    = not na(time(timeframe.period, sessSkip + ":123456", sessTz))   // opening no-trade window
 inSession = not useSess or (inMain and not inSkip)
 
@@ -372,7 +376,7 @@ if showTable and barstate.islast
     f_cell(2, 11, trendShort ? "✔ RIDING" : trendShortRaw ? "✘ " + (inSkip ? "opening 10 min" : "outside hours") : "✘ " + f_trMiss(tS1, tS2, tS3, tS4, tS5), trendShort ? colBear : color.gray)
 
     f_cell(0, 12, "Trading hours", txtCol)
-    f_cell(1, 12, not useSess ? "filter off" : sessMain + " excl. " + sessSkip + " (" + sessTz + ")", color.gray)
+    f_cell(1, 12, not useSess ? "filter off" : "Sun " + sessSun + ", Mon-Fri " + sessMain + " excl. " + sessSkip + " (" + sessTz + ")", color.gray)
     f_cell(2, 12, not useSess ? "—" : inSkip and inMain ? "✘ OPENING 10 MIN" : inMain ? "✔ IN SESSION" : "✘ OUTSIDE HOURS", not useSess ? color.gray : inMain and not inSkip ? colBull : colBear)
 
 // ───────────────────────────── MACD table ─────────────────────────────
