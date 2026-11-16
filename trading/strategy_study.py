@@ -15,8 +15,8 @@ histograms are mapped to each 15s bar using the last *completed* 5m bar).
 
 Every trend signal is rebuilt from the exported averages and MACDs with the current
 rules, so results don't depend on the indicator version used for the export.
-Prices on a Heikin Ashi chart are HA prices: targets/stops touched by HA highs/lows are
-slightly optimistic for small targets.
+Use regular-candle exports. Heikin Ashi exports overstate results badly: HA closes carry momentum
+forward, and MACD-turn edges measured on HA prices disappeared on real prices (Aug-Nov 2026 test).
 """
 import argparse
 import csv
@@ -132,6 +132,12 @@ def main():
     ap.add_argument("--max-hold-min", type=int, default=60)
     a = ap.parse_args()
     d = build(a.exports, a.five)
+    ha = ((d.open - (d.open.shift() + d.close.shift()) / 2).abs() < 1e-6).mean()
+    if ha > 0.5:
+        print("WARNING: this export is Heikin Ashi (each open = midpoint of the previous HA bar).\n"
+              "  HA closes are smoothed averages that carry momentum forward, so profits measured on them are\n"
+              "  overstated. On Aug-Nov 2026 NAS100 data, MACD-turn edges that looked strong on HA prices\n"
+              "  disappeared on real prices. Export with regular Candles for any P&L conclusion.\n")
     # trading week starts Sunday 18:00 NY: shift 6h so Sunday evening counts toward the following week
     d["week"] = (d.dt + pd.Timedelta(hours=6)).dt.strftime("%G-W%V")
     sim = Sim(d, a.cost, a.max_hold_min * 4)
