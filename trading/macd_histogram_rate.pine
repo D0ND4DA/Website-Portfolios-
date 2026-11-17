@@ -12,6 +12,10 @@
 //  • Turn speed – on every Red→Burgundy (rise turn) and Aqua→Blue (decline turn), how fast the
 //                turn was compared with that MACD's own recent turns (percentile). "Fast" turns are
 //                marked and alertable.
+//  • Depth     – how far from zero the histogram got before turning (deep vs shallow Burgundy/Blue),
+//                ranked against that MACD's recent turns.
+//  • Back to 0 – during Burgundy/Blue, how much of the way back to zero the histogram has come
+//                (0% = still at its deepest point, 100% = back at zero).
 //
 // Rates can be ATR-scaled (divided by that timeframe's ATR 14) so quiet and volatile periods compare.
 //
@@ -32,6 +36,9 @@ normMode  = input.string("ATR-scaled", "Rate units", options = ["ATR-scaled", "P
 turnLook  = input.int(200, "Turns remembered for speed ranking", minval = 20, maxval = 2000, group = grpG,
      tooltip = "Each new turn is ranked against this many previous turns of the same MACD and direction.")
 fastPct   = input.float(67, "Fast turn = faster than this % of past turns", minval = 50, maxval = 99, step = 1, group = grpG)
+deepPct   = input.float(67, "Deep turn = deeper than this % of past turns", minval = 50, maxval = 99, step = 1, group = grpG)
+depthFilt = input.string("Any depth", "Fast-turn marks & alerts: depth", options = ["Any depth", "Deep only", "Not deep"], group = grpG,
+     tooltip = "Regular-candle test (NAS100 5m, Aug-Nov): on 8/22/9 and 12/30/12, deep turns did slightly better than shallow ones. On 72/200/12 the opposite: deep Burgundy turns reached zero only 14% of the time and lost money (a bounce inside a strong downtrend). None of these were profitable on their own.")
 
 grp1 = "MACD 1"
 on1  = input.bool(true, "Enable", group = grp1, inline = "1a")
@@ -81,7 +88,13 @@ f_core(simple int f, simple int s, simple int g, simple bool useSma, simple int 
     tDn  = st[1] == 0 and st == 1         // Aqua -> Blue (decline turn)
     spd  = atr > 0 ? math.abs(dh) / atr : na
     pr   = ta.percentrank(spd, 200)       // current |rate| vs the last 200 bars (0-100)
-    [h[off], dh[off], ddh[off], atr[off], st[off], bars[off], tUp[off], tDn[off], pr[off]]
+    // Deepest point of the current excursion below zero (or highest above zero)
+    below = h <= 0
+    var float ext = na
+    ext := na(ext) or below != below[1] ? h : below ? math.min(ext, h) : math.max(ext, h)
+    dep  = atr > 0 ? math.abs(ext) / atr : na                 // depth of this excursion, in ATRs
+    prog = ext != 0 and not na(ext) ? 1.0 - h / ext : na      // 0 = at the extreme, 1 = back at zero
+    [h[off], dh[off], ddh[off], atr[off], st[off], bars[off], tUp[off], tDn[off], pr[off], dep[off], prog[off]]
 
 // Percent of values in `arr` that are <= x (needs at least 10 stored turns)
 f_rank(array<float> arr, float x) =>
@@ -101,7 +114,7 @@ f_macd(simple string tf, simple int f, simple int s, simple int g) =>
     htf  = timeframe.in_seconds(tfE) > timeframe.in_seconds(timeframe.period)
     off  = noRepaint and htf ? 1 : 0
     lk   = noRepaint and htf ? barmerge.lookahead_on : barmerge.lookahead_off
-    [h, dh, ddh, atr, st, bars, tUp, tDn, pr] = request.security(syminfo.tickerid, tfE, f_core(f, s, g, sigType == "SMA", off), lookahead = lk)
+    [h, dh, ddh, atr, st, bars, tUp, tDn, pr, dep, prog] = request.security(syminfo.tickerid, tfE, f_core(f, s, g, sigType == "SMA", off), lookahead = lk)
     isNew = timeframe.change(tfE)
     evUp  = tUp and (not tUp[1] or isNew)
     evDn  = tDn and (not tDn[1] or isNew)
@@ -110,6 +123,11 @@ f_macd(simple string tf, simple int f, simple int s, simple int g) =>
     acc   = normMode == "ATR-scaled" ? (atr > 0 ? ddh / atr : na) : ddh
     var array<float> upHist = array.new<float>()
     var array<float> dnHist = array.new<float>()
+    var array<float> upDep  = array.new<float>()
+    var array<float> dnDep  = array.new<float>()
+    var float lastDepPct = na
+    float upDepPct = na
+    float dnDepPct = na
     var float lastPct = na
     var int   lastDir = 0
     var int   lastBar = na
@@ -120,6 +138,11 @@ f_macd(simple string tf, simple int f, simple int s, simple int g) =>
         array.push(upHist, spd)
         if array.size(upHist) > turnLook
             array.shift(upHist)
+        upDepPct := f_rank(upDep, dep)
+        array.push(upDep, dep)
+        if array.size(upDep) > turnLook
+            array.shift(upDep)
+        lastDepPct := upDepPct
         lastPct := upPct
         lastDir := 1
         lastBar := bar_index
@@ -128,22 +151,29 @@ f_macd(simple string tf, simple int f, simple int s, simple int g) =>
         array.push(dnHist, spd)
         if array.size(dnHist) > turnLook
             array.shift(dnHist)
+        dnDepPct := f_rank(dnDep, dep)
+        array.push(dnDep, dep)
+        if array.size(dnDep) > turnLook
+            array.shift(dnDep)
+        lastDepPct := dnDepPct
         lastPct := dnPct
         lastDir := -1
         lastBar := bar_index
-    [h, rate, acc, st, bars, upPct, dnPct, pr, lastPct, lastDir, lastBar]
+    [h, rate, acc, st, bars, upPct, dnPct, pr, lastPct, lastDir, lastBar, dep, prog, upDepPct, dnDepPct, lastDepPct]
 
-[h1, r1, a1, st1, b1, up1, dp1, pr1, lp1, ld1, lb1] = f_macd(tf1, f1, s1, g1)
-[h2, r2, a2, st2, b2, up2, dp2, pr2, lp2, ld2, lb2] = f_macd(tf2, f2, s2, g2)
-[h3, r3, a3, st3, b3, up3, dp3, pr3, lp3, ld3, lb3] = f_macd(tf3, f3, s3, g3)
+[h1, r1, a1, st1, b1, up1, dp1, pr1, lp1, ld1, lb1, dep1, prg1, ud1, dd1, ldp1] = f_macd(tf1, f1, s1, g1)
+[h2, r2, a2, st2, b2, up2, dp2, pr2, lp2, ld2, lb2, dep2, prg2, ud2, dd2, ldp2] = f_macd(tf2, f2, s2, g2)
+[h3, r3, a3, st3, b3, up3, dp3, pr3, lp3, ld3, lb3, dep3, prg3, ud3, dd3, ldp3] = f_macd(tf3, f3, s3, g3)
 
-// Fast turns
-fu1 = on1 and not na(up1) and up1 >= fastPct
-fd1 = on1 and not na(dp1) and dp1 >= fastPct
-fu2 = on2 and not na(up2) and up2 >= fastPct
-fd2 = on2 and not na(dp2) and dp2 >= fastPct
-fu3 = on3 and not na(up3) and up3 >= fastPct
-fd3 = on3 and not na(dp3) and dp3 >= fastPct
+// Fast turns (optionally filtered by depth)
+f_depOk(float dpct) =>
+    depthFilt == "Any depth" ? true : na(dpct) ? false : depthFilt == "Deep only" ? dpct >= deepPct : dpct < deepPct
+fu1 = on1 and not na(up1) and up1 >= fastPct and f_depOk(ud1)
+fd1 = on1 and not na(dp1) and dp1 >= fastPct and f_depOk(dd1)
+fu2 = on2 and not na(up2) and up2 >= fastPct and f_depOk(ud2)
+fd2 = on2 and not na(dp2) and dp2 >= fastPct and f_depOk(dd2)
+fu3 = on3 and not na(up3) and up3 >= fastPct and f_depOk(ud3)
+fd3 = on3 and not na(dp3) and dp3 >= fastPct and f_depOk(dd3)
 
 // ───────────────────────────── Pane ─────────────────────────────
 f_col(int st) =>
@@ -172,14 +202,20 @@ plot(r1,  "MACD1 rate",  display = display.data_window)
 plot(a1,  "MACD1 accel", display = display.data_window)
 plot(st1, "MACD1 color (0 aqua 1 blue 2 red 3 burgundy)", display = display.data_window)
 plot(nz(up1, nz(dp1, na)), "MACD1 turn speed pct", display = display.data_window)
+plot(dep1, "MACD1 depth (ATR)", display = display.data_window)
+plot(prg1, "MACD1 back to zero (0-1)", display = display.data_window)
 plot(r2,  "MACD2 rate",  display = display.data_window)
 plot(a2,  "MACD2 accel", display = display.data_window)
 plot(st2, "MACD2 color (0 aqua 1 blue 2 red 3 burgundy)", display = display.data_window)
 plot(nz(up2, nz(dp2, na)), "MACD2 turn speed pct", display = display.data_window)
+plot(dep2, "MACD2 depth (ATR)", display = display.data_window)
+plot(prg2, "MACD2 back to zero (0-1)", display = display.data_window)
 plot(r3,  "MACD3 rate",  display = display.data_window)
 plot(a3,  "MACD3 accel", display = display.data_window)
 plot(st3, "MACD3 color (0 aqua 1 blue 2 red 3 burgundy)", display = display.data_window)
 plot(nz(up3, nz(dp3, na)), "MACD3 turn speed pct", display = display.data_window)
+plot(dep3, "MACD3 depth (ATR)", display = display.data_window)
+plot(prg3, "MACD3 back to zero (0-1)", display = display.data_window)
 
 // ───────────────────────────── Table ─────────────────────────────
 f_pos(s) =>
@@ -189,7 +225,7 @@ f_pos(s) =>
         "Bottom Left"  => position.bottom_left
         => position.top_right
 
-var table tbl = table.new(f_pos(tblPos), 9, 4, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1)
+var table tbl = table.new(f_pos(tblPos), 11, 4, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1)
 
 f_cell(c, r, txt, tc, bg) =>
     table.cell(tbl, c, r, txt, text_color = tc, bgcolor = bg, text_size = size.small, text_halign = text.align_left)
@@ -199,11 +235,14 @@ f_stName(int st) =>
 
 fmtR = normMode == "ATR-scaled" ? "+0.0000;-0.0000" : "+0.00;-0.00"
 
-f_lastTurn(float pct, int dir, int lb) =>
-    string cls = na(pct) ? "learning" : pct >= fastPct ? "FAST" : pct <= 100 - fastPct ? "slow" : "normal"
-    na(lb) ? "none yet" : (dir == 1 ? "Rise " : "Decline ") + cls + (na(pct) ? "" : " (" + str.tostring(pct, "0") + "th pct)") + ", " + str.tostring(bar_index - lb) + " bars ago"
+f_depName(float dpct) =>
+    na(dpct) ? "" : dpct >= deepPct ? "deep" : dpct <= 100 - deepPct ? "shallow" : "medium"
 
-f_row(int r, bool on, string tf, int f, int s, int g, float h, float rt, float ac, int st, int bars, float pr, float lp, int ld, int lb) =>
+f_lastTurn(float pct, int dir, int lb, float dpct) =>
+    string cls = na(pct) ? "learning" : pct >= fastPct ? "FAST" : pct <= 100 - fastPct ? "slow" : "normal"
+    na(lb) ? "none yet" : (dir == 1 ? "Rise " : "Decline ") + cls + (na(pct) ? "" : " (" + str.tostring(pct, "0") + "th pct)") + (na(dpct) ? "" : ", " + f_depName(dpct) + " (" + str.tostring(dpct, "0") + "th)") + ", " + str.tostring(bar_index - lb) + " bars ago"
+
+f_row(int r, bool on, string tf, int f, int s, int g, float h, float rt, float ac, int st, int bars, float pr, float lp, int ld, int lb, float dp, float pg, float ldp) =>
     tfTxt = tf == "" ? timeframe.period : tf
     noBg = color.new(color.black, 100)
     f_cell(0, r, "MACD " + str.tostring(r), color.white, noBg)
@@ -215,7 +254,9 @@ f_row(int r, bool on, string tf, int f, int s, int g, float h, float rt, float a
         f_cell(5, r, str.tostring(ac, fmtR) + (ac * rt > 0 ? "  speeding up" : ac * rt < 0 ? "  slowing" : ""), color.white, noBg)
         f_cell(6, r, na(pr) ? "—" : str.tostring(pr, "0") + "th", color.white, noBg)
         f_cell(7, r, na(bars) ? "—" : str.tostring(bars), color.white, noBg)
-        f_cell(8, r, f_lastTurn(lp, ld, lb), na(lp) ? color.gray : lp >= fastPct ? color.yellow : color.white, noBg)
+        f_cell(8, r, na(dp) ? "—" : str.tostring(dp, "0.00") + " ATR", color.white, noBg)
+        f_cell(9, r, (st == 1 or st == 3) and not na(pg) ? str.tostring(pg * 100, "0") + "%" : "—", color.white, noBg)
+        f_cell(10, r, f_lastTurn(lp, ld, lb, ldp), na(lp) ? color.gray : lp >= fastPct ? color.yellow : color.white, noBg)
     else
         f_cell(2, r, "off", color.gray, noBg)
 
@@ -229,10 +270,12 @@ if showTable and barstate.islast
     f_cell(5, 0, "Accel",         color.gray, hdr)
     f_cell(6, 0, "Rate rank",     color.gray, hdr)
     f_cell(7, 0, "Bars in color", color.gray, hdr)
-    f_cell(8, 0, "Last turn",     color.gray, hdr)
-    f_row(1, on1, tf1, f1, s1, g1, h1, r1, a1, st1, b1, pr1, lp1, ld1, lb1)
-    f_row(2, on2, tf2, f2, s2, g2, h2, r2, a2, st2, b2, pr2, lp2, ld2, lb2)
-    f_row(3, on3, tf3, f3, s3, g3, h3, r3, a3, st3, b3, pr3, lp3, ld3, lb3)
+    f_cell(8, 0, "Depth from 0",  color.gray, hdr)
+    f_cell(9, 0, "Back to 0",     color.gray, hdr)
+    f_cell(10, 0, "Last turn",    color.gray, hdr)
+    f_row(1, on1, tf1, f1, s1, g1, h1, r1, a1, st1, b1, pr1, lp1, ld1, lb1, dep1, prg1, ldp1)
+    f_row(2, on2, tf2, f2, s2, g2, h2, r2, a2, st2, b2, pr2, lp2, ld2, lb2, dep2, prg2, ldp2)
+    f_row(3, on3, tf3, f3, s3, g3, h3, r3, a3, st3, b3, pr3, lp3, ld3, lb3, dep3, prg3, ldp3)
 
 // ───────────────────────────── Alerts ─────────────────────────────
 alertcondition(fu1, "MACD 1 fast rise turn",    "MACD 1: fast Red→Burgundy turn (histogram rising fast below zero)")
