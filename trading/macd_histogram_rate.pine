@@ -67,7 +67,7 @@ colBurg   = input.color(color.rgb(128, 0, 32),  "Burgundy (below 0, rising)", gr
 
 // ───────────────────────────── Core (runs on each MACD's own timeframe) ─────────────────────────────
 // Returns values shifted by `off` bars (1 = last closed bar, for the non-repainting option).
-f_core(int f, int s, int g, bool useSma, int off) =>
+f_core(simple int f, simple int s, simple int g, simple bool useSma, simple int off) =>
     m    = ta.ema(close, f) - ta.ema(close, s)
     sgS  = ta.sma(m, g)
     sgE  = ta.ema(m, g)
@@ -96,7 +96,7 @@ f_rank(array<float> arr, float x) =>
     r
 
 // One MACD: request its timeframe, detect turns once per bar of that timeframe, rank turn speed.
-f_macd(string tf, int f, int s, int g) =>
+f_macd(simple string tf, simple int f, simple int s, simple int g) =>
     tfE  = tf == "" ? timeframe.period : tf
     htf  = timeframe.in_seconds(tfE) > timeframe.in_seconds(timeframe.period)
     off  = noRepaint and htf ? 1 : 0
